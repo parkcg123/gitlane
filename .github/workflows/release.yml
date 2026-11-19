@@ -1,0 +1,121 @@
+name: Release & Publish
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  vscode-extension:
+    name: Build & Publish VS Code Extension
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vscode-extension
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: vscode-extension/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Compile and test
+        run: |
+          npm run compile
+          npm test
+
+      - name: Package VSIX
+        env:
+          npm_config_yes: "true"
+        run: npm run package
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vscode-extension-vsix
+          path: vscode-extension/*.vsix
+
+      - name: Publish to Visual Studio Marketplace
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: |
+          if [ -z "$VSCE_PAT" ]; then
+            echo "VSCE_PAT is not set; skipping Visual Studio Marketplace publish."
+            exit 0
+          fi
+          npx --yes @vscode/vsce publish --packagePath *.vsix -p "$VSCE_PAT"
+
+      - name: Publish to Open VSX Registry
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          if [ -z "$OVSX_PAT" ]; then
+            echo "OVSX_PAT is not set; skipping Open VSX Registry publish."
+            exit 0
+          fi
+          npx --yes ovsx publish *.vsix -p "$OVSX_PAT"
+
+  intellij-plugin:
+    name: Build & Publish IntelliJ Plugin
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: intellij-plugin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Test and build plugin
+        run: |
+          chmod +x gradlew
+          ./gradlew test buildPlugin
+
+      - name: Upload plugin ZIP artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: intellij-plugin-zip
+          path: intellij-plugin/build/distributions/*.zip
+
+      - name: Publish to JetBrains Marketplace
+        env:
+          JETBRAINS_MARKETPLACE_TOKEN: ${{ secrets.JETBRAINS_MARKETPLACE_TOKEN }}
+        run: |
+          if [ -z "$JETBRAINS_MARKETPLACE_TOKEN" ]; then
+            echo "JETBRAINS_MARKETPLACE_TOKEN is not set; skipping JetBrains Marketplace publish."
+            exit 0
+          fi
+          ./gradlew publishPlugin
+
+  github-release:
+    name: Create GitHub Release
+    needs: [vscode-extension, intellij-plugin]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/*.vsix
+            release-assets/*.zip
+          generate_release_notes: true

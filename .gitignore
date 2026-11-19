@@ -1,0 +1,9 @@
+node_modules/
+vscode-extension/out/
+vscode-extension/out-test/
+vscode-extension/*.vsix
+intellij-plugin/.gradle/
+intellij-plugin/.intellijPlatform/
+intellij-plugin/build/
+.idea/
+.DS_Store

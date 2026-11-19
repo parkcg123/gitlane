@@ -1,0 +1,81 @@
+<idea-plugin>
+    <id>io.github.parkcg123.gitlane</id>
+    <name>GitLane</name>
+    <vendor url="https://github.com/parkcg123/gitlane">PCK</vendor>
+
+    <description><![CDATA[
+        <p>
+            A streamlined, guarded Git workflow plugin for teams following the
+            <b>develop → YYYYMMDD_task → develop → master</b> lane.
+            Works identically alongside the GitLane VS Code extension via a shared
+            <code>.gitlane.json</code> repository configuration.
+        </p>
+        <ul>
+            <li><b>① Start Task</b>: Fast-forwards <code>develop</code> and creates a local-date <code>YYYYMMDD_task</code> branch with dirty-tree auto-stash protection.</li>
+            <li><b>② Merge to develop</b>: Verifies clean working tree and non-protected branch, merges with <code>--no-ff</code>, pushes, and optionally deletes the task branch.</li>
+            <li><b>③ Release to master</b>: Previews ahead commits before merging <code>develop</code> into <code>master</code>, pushes, and returns to <code>develop</code>.</li>
+            <li><b>Conflict Guardrails</b>: Pauses safely on merge conflicts, opens IntelliJ's native 3-Way Merge dialog, and provides one-click completion or abort recovery.</li>
+        </ul>
+        <p>팀 공용 초간단 Git 워크플로우 (develop → YYYYMMDD_작업명 → develop → master) 플러그인입니다.</p>
+    ]]></description>
+
+    <change-notes><![CDATA[
+        <ul>
+            <li><b>0.1.0</b>: Initial release of GitLane with Start Task, Merge to develop, Release to master, native 3-Way Merge conflict workflow, and real-time Status Bar widget.</li>
+        </ul>
+    ]]></change-notes>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>Git4Idea</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <statusBarWidgetFactory
+                id="io.github.parkcg123.gitlane.StatusBarWidget"
+                implementation="io.github.parkcg123.gitlane.ui.FlowStatusBarWidgetFactory"/>
+        <notificationGroup
+                id="GitLane"
+                displayType="BALLOON"/>
+    </extensions>
+
+    <actions>
+        <group id="GitLane.ActionGroup"
+               text="GitLane"
+               description="팀 공용 GitLane 워크플로우"
+               popup="true">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+            <add-to-group group-id="VcsGroups" anchor="last"/>
+
+            <action id="GitLane.StartTask"
+                    class="io.github.parkcg123.gitlane.actions.StartTaskAction"
+                    text="① 작업 시작 (브랜치 생성)"
+                    description="develop 브랜치를 최신화한 뒤 YYYYMMDD_작업명 브랜치를 생성합니다."/>
+
+            <action id="GitLane.MergeToDevelop"
+                    class="io.github.parkcg123.gitlane.actions.MergeToDevelopAction"
+                    text="② 스테이지 반영 (develop 병합)"
+                    description="현재 작업 브랜치를 develop에 병합하고 푸시합니다."/>
+
+            <action id="GitLane.ReleaseToMaster"
+                    class="io.github.parkcg123.gitlane.actions.ReleaseToMasterAction"
+                    text="③ 운영 반영 (develop → master)"
+                    description="검증이 완료된 develop 브랜치를 master에 병합하고 푸시합니다."/>
+
+            <separator/>
+
+            <action id="GitLane.ResolveConflicts"
+                    class="io.github.parkcg123.gitlane.actions.ResolveConflictsAction"
+                    text="충돌 해결 창 열기 (3-Way Merge)"
+                    description="충돌 중인 파일에 대해 IntelliJ 3-Way Merge 창을 엽니다."/>
+
+            <action id="GitLane.ContinueMerge"
+                    class="io.github.parkcg123.gitlane.actions.ContinueMergeAction"
+                    text="충돌 해결 완료 (커밋 &amp; 푸시)"
+                    description="충돌 해결 후 머지 커밋을 생성하고 원격 저장소에 푸시합니다."/>
+
+            <action id="GitLane.AbortMerge"
+                    class="io.github.parkcg123.gitlane.actions.AbortMergeAction"
+                    text="머지 취소 (원복)"
+                    description="진행 중인 병합을 중단하고 원래 브랜치로 복구합니다."/>
+        </group>
+    </actions>
+</idea-plugin>

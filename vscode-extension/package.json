@@ -1,0 +1,136 @@
+{
+  "name": "gitlane",
+  "displayName": "GitLane",
+  "description": "팀 공용 초간단 Git 워크플로우 (develop → YYYYMMDD_작업명 → develop → master)",
+  "version": "0.1.0",
+  "publisher": "pck",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "author": {
+    "name": "PCK",
+    "url": "https://github.com/parkcg123/"
+  },
+  "homepage": "https://github.com/parkcg123/gitlane#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/parkcg123/gitlane.git"
+  },
+  "bugs": {
+    "url": "https://github.com/parkcg123/gitlane/issues"
+  },
+  "keywords": [
+    "git",
+    "gitlane",
+    "git-flow",
+    "branch",
+    "merge",
+    "conflict",
+    "workflow",
+    "scm"
+  ],
+  "galleryBanner": {
+    "color": "#1E293B",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "gitlane.openMenu",
+        "title": "GitLane: 메뉴 열기",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "gitlane.startTask",
+        "title": "GitLane: ① 작업 시작 (브랜치 생성)",
+        "icon": "$(git-branch)"
+      },
+      {
+        "command": "gitlane.mergeToDevelop",
+        "title": "GitLane: ② 스테이지 반영 (develop 병합)",
+        "icon": "$(git-merge)"
+      },
+      {
+        "command": "gitlane.releaseToMaster",
+        "title": "GitLane: ③ 운영 반영 (develop → master)",
+        "icon": "$(rocket)"
+      },
+      {
+        "command": "gitlane.continueMerge",
+        "title": "GitLane: 충돌 해결 완료 (커밋 & 푸시)",
+        "icon": "$(check)"
+      },
+      {
+        "command": "gitlane.abortMerge",
+        "title": "GitLane: 머지 취소 (원복)",
+        "icon": "$(discard)"
+      },
+      {
+        "command": "gitlane.openConflictManager",
+        "title": "GitLane: 충돌 관리 창 열기",
+        "icon": "$(layout)"
+      }
+    ],
+    "menus": {
+      "scm/title": [
+        {
+          "command": "gitlane.openMenu",
+          "when": "scmProvider == git",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "GitLane",
+      "properties": {
+        "gitlane.developBranch": {
+          "type": "string",
+          "default": "develop",
+          "description": "스테이지(개발) 통합 브랜치 이름"
+        },
+        "gitlane.masterBranch": {
+          "type": "string",
+          "default": "master",
+          "description": "운영 배포 브랜치 이름"
+        },
+        "gitlane.remote": {
+          "type": "string",
+          "default": "origin",
+          "description": "원격 저장소(remote) 이름"
+        },
+        "gitlane.returnToDevelopAfterRelease": {
+          "type": "boolean",
+          "default": true,
+          "description": "운영(master) 반영 완료 후 develop 브랜치로 자동 복귀 여부"
+        },
+        "gitlane.useNoFastForwardMerge": {
+          "type": "boolean",
+          "default": true,
+          "description": "병합 시 --no-ff 옵션을 사용하여 머지 커밋 이력을 남길지 여부"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./tsconfig.json",
+    "compile:test": "tsc -p ./tsconfig.test.json",
+    "test": "npm run compile:test && node --test out-test/test/*.test.js",
+    "package": "npx @vscode/vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.6.0"
+  }
+}

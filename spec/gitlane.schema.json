@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/parkcg123/gitlane/main/spec/gitlane.schema.json",
+  "title": "GitLane Configuration",
+  "description": "Repository-level configuration for GitLane across VS Code and IntelliJ IDEA.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional JSON Schema URI."
+    },
+    "developBranch": {
+      "type": "string",
+      "minLength": 1,
+      "default": "develop",
+      "description": "Staging branch name where task branches fork from and merge back into."
+    },
+    "masterBranch": {
+      "type": "string",
+      "minLength": 1,
+      "default": "master",
+      "description": "Production branch name that receives releases from develop."
+    },
+    "remote": {
+      "type": "string",
+      "minLength": 1,
+      "default": "origin",
+      "description": "Git remote name used for fetch, pull, and push."
+    },
+    "dateFormat": {
+      "type": "string",
+      "enum": ["YYYYMMDD"],
+      "default": "YYYYMMDD",
+      "description": "Local date prefix format used in task branch names."
+    },
+    "separator": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2,
+      "default": "_",
+      "description": "Separator between date prefix and sanitized task name."
+    },
+    "returnToDevelopAfterRelease": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether to switch back to develop automatically after releasing to master."
+    },
+    "useNoFastForwardMerge": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether merges use --no-ff to preserve merge commit history."
+    }
+  }
+}
