@@ -10,6 +10,11 @@
       "type": "string",
       "description": "Optional JSON Schema URI."
     },
+    "useDevelopBranch": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether to use the staging develop branch. When false, task branches fork from and merge directly into masterBranch."
+    },
     "developBranch": {
       "type": "string",
       "minLength": 1,

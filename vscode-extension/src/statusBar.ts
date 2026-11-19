@@ -44,7 +44,9 @@ export class FlowStatusBar {
         this.item.text = `$(shield) GitLane: ${branch} (운영)`;
         this.item.tooltip = dirty
           ? `주의: 운영 브랜치(${branch})에 커밋되지 않은 변경사항이 있습니다.`
-          : `운영 브랜치(${branch}) — 클릭하여 GitLane 메뉴 열기`;
+          : config.useDevelopBranch
+            ? `운영 브랜치(${branch}) — 클릭하여 GitLane 메뉴 열기`
+            : `운영 브랜치(${branch}) — 클릭하여 작업 시작 또는 GitLane 메뉴 열기`;
         this.item.backgroundColor = dirty
           ? new vscode.ThemeColor('statusBarItem.warningBackground')
           : undefined;
@@ -52,7 +54,7 @@ export class FlowStatusBar {
         return;
       }
 
-      if (branch === config.developBranch) {
+      if (config.useDevelopBranch && branch === config.developBranch) {
         this.item.text = `$(git-branch) GitLane: ${branch} (스테이지)`;
         this.item.tooltip = `스테이지 브랜치(${branch}) — 클릭하여 작업 시작 또는 운영 반영 실행`;
         this.item.backgroundColor = undefined;
@@ -61,7 +63,9 @@ export class FlowStatusBar {
       }
 
       this.item.text = `$(git-branch) GitLane: ${branch}`;
-      this.item.tooltip = `작업 브랜치(${branch}) — 클릭하여 스테이지 반영 또는 메뉴 열기`;
+      this.item.tooltip = config.useDevelopBranch
+        ? `작업 브랜치(${branch}) — 클릭하여 스테이지 반영 또는 메뉴 열기`
+        : `작업 브랜치(${branch}) — 클릭하여 ${config.masterBranch} 바로 병합 또는 메뉴 열기`;
       this.item.backgroundColor = undefined;
       this.item.show();
     } catch {

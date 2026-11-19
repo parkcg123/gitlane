@@ -40,7 +40,12 @@ object WorkflowActionSupport {
                     }
 
                     val git = GitRunner(repoRoot)
-                    val ui = IntelliJWorkflowUi(project, repoRoot, loaded.config.separator)
+                    val ui = IntelliJWorkflowUi(
+                        project,
+                        repoRoot,
+                        loaded.config.separator,
+                        loaded.config.useDevelopBranch,
+                    )
                     val engine = WorkflowEngine(git, ui, loaded.config)
 
                     val result = operation(engine)

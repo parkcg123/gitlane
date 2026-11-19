@@ -9,6 +9,7 @@ data class PendingConflictContext(
 ) {
     companion object {
         const val KIND_MERGE_TO_DEVELOP = "mergeToDevelop"
+        const val KIND_MERGE_TO_MASTER = "mergeToMaster"
         const val KIND_RELEASE_TO_MASTER = "releaseToMaster"
     }
 }

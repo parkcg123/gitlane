@@ -13,7 +13,7 @@ VS Code 확장과 동일한 스펙(`../spec/workflow-spec.md`, `.gitlane.json`)�
 * `io.github.parkcg123.gitlane.naming.BranchNamer` — 로컬 타임존 기반 `YYYYMMDD_작업명` 검증/생성
 * `io.github.parkcg123.gitlane.git.GitRunner` — `GIT_TERMINAL_PROMPT=0` 기반 안전한 `git` 실행기
 * `io.github.parkcg123.gitlane.workflow.WorkflowEngine` — 사전 가드레일, 병합/배포, 충돌 복구 상태 머신 및 `PersistentStateComponent` 기반 충돌 컨텍스트 저장
-* `io.github.parkcg123.gitlane.ui.IntelliJWorkflowUi` — 배경 스레드 안전 다이얼로그 및 IntelliJ 네이티브 3-Way Merge(`AbstractVcsHelper.showMergeDialog`) 연동
+* `io.github.parkcg123.gitlane.ui.IntelliJWorkflowUi` — 배경 스레드 안전 다이얼로그 및 IntelliJ 네이티브 3-Way Merge(`GitConflictResolver`) 연동
 * `io.github.parkcg123.gitlane.ui.FlowStatusBarWidgetFactory` — `GitRepository.GIT_REPO_CHANGE` 구독 기반 비동기 상태바 위젯
 * `io.github.parkcg123.gitlane.actions.*` — `ProgressManager` (`Task.Backgroundable`) 기반 6개 액션 (`① 작업 시작`, `② 스테이지 반영`, `③ 운영 반영`, `충돌 해결 창 열기`, `충돌 해결 완료`, `머지 취소`)
 
@@ -22,7 +22,7 @@ VS Code 확장과 동일한 스펙(`../spec/workflow-spec.md`, `.gitlane.json`)�
 ```bash
 ./gradlew test          # 단위 테스트 및 임시 Git 저장소 통합 테스트
 ./gradlew runIde        # 테스트용 IntelliJ 샌드박스 IDE 실행
-./gradlew buildPlugin   # build/distributions/gitlane-intellij-0.1.0.zip 생성
+./gradlew buildPlugin   # build/distributions/gitlane-intellij-0.2.0.zip 생성
 ```
 
 ## 메뉴 및 UI 위치

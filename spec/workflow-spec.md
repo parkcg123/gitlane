@@ -4,10 +4,12 @@
 
 ---
 
-## 1. 브랜치 모델 (`develop → master`)
+## 1. 브랜치 모델 (`develop → master` 또는 `master` 직행)
 
 * **기준(Base) 브랜치**: `develop` (스테이지), `master` (운영)
-* **작업 브랜치 생성**: 항상 최신 `develop`에서 분기합니다.
+* **단일 브랜치 모드 (`useDevelopBranch: false`)**:
+  * `develop` 브랜치를 사용하지 않고 `master`(또는 `main`)에서 직접 작업 브랜치를 분기하고 바로 병합합니다.
+* **작업 브랜치 생성**: `useDevelopBranch: true`이면 최신 `develop`에서, `false`이면 최신 `master`에서 분기합니다.
 * **작업 브랜치 이름 규칙**: `{YYYYMMDD}{separator}{작업명}`
   * 날짜는 **로컬 타임존(`YYYYMMDD`)** 기준을 사용합니다. (UTC 기준 사용 금지)
   * 기본 구분자(`separator`)는 `_` 입니다. (예: `20261119_login_fix`, `20261119_결제_오류_수정`)
@@ -24,6 +26,7 @@
 1. 저장소 루트의 `.gitlane.json` (최우선)
 2. IDE 확장/플러그인 설정 (`gitlane.*`)
 3. 기본값:
+   * `useDevelopBranch`: `true`
    * `developBranch`: `"develop"`
    * `masterBranch`: `"master"`
    * `remote`: `"origin"`
@@ -53,27 +56,18 @@
      * `"취소"` 선택 시 종료.
   6. `git checkout -b <taskBranch>` 실행.
 
-### ② 스테이지 반영 (`mergeToDevelop`)
+### ② 스테이지/운영 바로 반영 (`mergeToDevelop`)
 
+* `useDevelopBranch`가 `true`이면 대상 브랜치는 `develop`(충돌 컨텍스트 `kind: "mergeToDevelop"`), `false`이면 대상 브랜치는 `master`(충돌 컨텍스트 `kind: "mergeToMaster"`)입니다.
 * **사전 검사 (Pre-flight)**:
   1. 진행 중인 머지/리베이스가 있으면 중단합니다.
-  2. Detached HEAD 상태이거나 현재 브랜치가 `develop` 또는 `master`이면 차단합니다.
+  2. Detached HEAD 상태이거나 현재 브랜치가 보호 브랜치(`useDevelopBranch: true`일 때 `develop` 또는 `master`, `false`일 때 `master`)이면 차단합니다.
   3. 미커밋 변경사항이 있으면 커밋 또는 Stash를 먼저 하도록 안내하고 차단합니다.
-  4. `develop`을 최신화한 뒤 `develop..<taskBranch>` 커밋이 없으면 `"develop에 병합할 새 커밋이 없습니다."` 안내 후 종료합니다.
-* **사용자 확인 (3지선다)**:
-  * `"병합 + 푸시 + 브랜치 삭제"`
-  * `"병합 + 푸시 (브랜치 유지)"`
-  * `"취소"`
-* **실행 절차**:
-  1. `git checkout <develop>` & 원격 동기화(`pull --ff-only`).
-  2. `git merge [--no-ff] <taskBranch>` 실행.
-  3. 충돌 발생 시 **충돌 가드레일**로 전환 (`targetBranch: develop`, `sourceBranch: taskBranch`, `returnBranch: taskBranch`, `deleteSourceOnComplete: 선택한 삭제 여부`).
-  4. 병합 성공 + 원격 존재 시 `git push <remote> <develop>`.
-  5. 선택에 따른 후처리:
-     * **삭제 선택 시**: `git branch -d <taskBranch>` 및 원격 브랜치가 있으면 best-effort로 `git push <remote> --delete <taskBranch>`.
-     * **유지 선택 시**: `git checkout <taskBranch>`로 복귀.
+  4. 대상 브랜치를 최신화한 뒤 `<targetBranch>..<taskBranch>` 커밋이 없으면 `"<targetBranch>에 병합할 새 커밋이 없습니다."` 안내 후 종료합니다.
 
 ### ③ 운영 반영 (`releaseToMaster`)
+
+* `useDevelopBranch`가 `false`인 경우 메뉴에서 숨김 처리되며, 직접 호출 시 차단 안내 후 종료합니다.
 
 * **사전 검사 (Pre-flight)**:
   1. 진행 중인 머지/리베이스가 있으면 중단합니다.

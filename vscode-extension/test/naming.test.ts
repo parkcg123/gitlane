@@ -70,10 +70,14 @@ describe('naming utilities', () => {
   });
 
   it('identifies protected branches', () => {
-    const cfg = { developBranch: 'develop', masterBranch: 'master' };
+    const cfg = { developBranch: 'develop', masterBranch: 'master', useDevelopBranch: true };
     assert.equal(isProtectedBranch('develop', cfg), true);
     assert.equal(isProtectedBranch('master', cfg), true);
     assert.equal(isProtectedBranch('20261119_login_fix', cfg), false);
+
+    const directCfg = { developBranch: 'develop', masterBranch: 'master', useDevelopBranch: false };
+    assert.equal(isProtectedBranch('develop', directCfg), false);
+    assert.equal(isProtectedBranch('master', directCfg), true);
   });
 });
 
@@ -81,14 +85,16 @@ describe('loadRepoConfig', () => {
   it('merges defaults, IDE overrides, and repo config file in precedence order', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitlane-cfg-'));
     try {
-      const base = loadRepoConfig(tmpDir, { remote: 'upstream' });
+      const base = loadRepoConfig(tmpDir, { remote: 'upstream', useDevelopBranch: false });
       assert.equal(base.warning, undefined);
       assert.equal(base.config.developBranch, DEFAULT_FLOW_CONFIG.developBranch);
       assert.equal(base.config.remote, 'upstream');
+      assert.equal(base.config.useDevelopBranch, false);
 
       fs.writeFileSync(
         path.join(tmpDir, CONFIG_FILENAME),
         JSON.stringify({
+          useDevelopBranch: false,
           developBranch: 'staging',
           masterBranch: 'main',
           returnToDevelopAfterRelease: false,
@@ -96,8 +102,13 @@ describe('loadRepoConfig', () => {
         'utf8'
       );
 
-      const loaded = loadRepoConfig(tmpDir, { remote: 'upstream', developBranch: 'dev' });
+      const loaded = loadRepoConfig(tmpDir, {
+        remote: 'upstream',
+        developBranch: 'dev',
+        useDevelopBranch: true,
+      });
       assert.equal(loaded.warning, undefined);
+      assert.equal(loaded.config.useDevelopBranch, false);
       assert.equal(loaded.config.developBranch, 'staging');
       assert.equal(loaded.config.masterBranch, 'main');
       assert.equal(loaded.config.remote, 'upstream');

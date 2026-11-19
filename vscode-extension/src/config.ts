@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 export interface FlowConfig {
+  useDevelopBranch: boolean;
   developBranch: string;
   masterBranch: string;
   remote: string;
@@ -14,6 +15,7 @@ export interface FlowConfig {
 export const CONFIG_FILENAME = '.gitlane.json';
 
 export const DEFAULT_FLOW_CONFIG: FlowConfig = {
+  useDevelopBranch: true,
   developBranch: 'develop',
   masterBranch: 'master',
   remote: 'origin',
@@ -28,6 +30,12 @@ export interface LoadedConfigResult {
   warning?: string;
 }
 
+export function getTaskBaseBranch(
+  config: Pick<FlowConfig, 'useDevelopBranch' | 'developBranch' | 'masterBranch'>
+): string {
+  return config.useDevelopBranch ? config.developBranch : config.masterBranch;
+}
+
 function pickNonEmptyString(value: unknown): string | undefined {
   if (typeof value === 'string') {
     const trimmed = value.trim();
@@ -38,8 +46,15 @@ function pickNonEmptyString(value: unknown): string | undefined {
   return undefined;
 }
 
-function mergePartialConfig(base: FlowConfig, overrides: Partial<Record<keyof FlowConfig, unknown>>): FlowConfig {
+function mergePartialConfig(
+  base: FlowConfig,
+  overrides: Partial<Record<keyof FlowConfig, unknown>>
+): FlowConfig {
   return {
+    useDevelopBranch:
+      typeof overrides.useDevelopBranch === 'boolean'
+        ? overrides.useDevelopBranch
+        : base.useDevelopBranch,
     developBranch: pickNonEmptyString(overrides.developBranch) ?? base.developBranch,
     masterBranch: pickNonEmptyString(overrides.masterBranch) ?? base.masterBranch,
     remote: pickNonEmptyString(overrides.remote) ?? base.remote,

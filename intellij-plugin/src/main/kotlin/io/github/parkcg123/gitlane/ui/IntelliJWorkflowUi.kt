@@ -7,9 +7,8 @@ import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.InputValidatorEx
 import com.intellij.openapi.ui.Messages
-import com.intellij.openapi.vcs.AbstractVcsHelper
 import com.intellij.openapi.vfs.LocalFileSystem
-import com.intellij.openapi.vfs.VirtualFile
+import git4idea.merge.GitConflictResolver
 import git4idea.repo.GitRepositoryManager
 import io.github.parkcg123.gitlane.naming.BranchNamer
 import io.github.parkcg123.gitlane.workflow.ConflictPromptChoice
@@ -24,6 +23,7 @@ class IntelliJWorkflowUi(
     private val project: Project,
     private val repoRoot: Path,
     private val separator: String,
+    private val useDevelopBranch: Boolean = true,
 ) : WorkflowUi {
 
     private fun <T> runOnEdtAndGet(block: () -> T): T {
@@ -101,11 +101,16 @@ class IntelliJWorkflowUi(
         developBranch: String,
         commitCount: Int,
     ): MergeToDevelopChoice {
+        val title = if (useDevelopBranch) {
+            "GitLane — ② 스테이지 반영 ($taskBranch → $developBranch)"
+        } else {
+            "GitLane — ② 운영 바로 반영 ($taskBranch → $developBranch)"
+        }
         return runOnEdtAndGet {
             val choiceIndex = Messages.showDialog(
                 project,
                 "'$taskBranch'의 ${commitCount}개 커밋을 '$developBranch'에 어떻게 반영할까요?",
-                "GitLane — ② 스테이지 반영 ($taskBranch → $developBranch)",
+                title,
                 arrayOf("병합 + 푸시 + 브랜치 삭제", "병합 + 푸시 (브랜치 유지)", "취소"),
                 0,
                 Messages.getQuestionIcon(),
@@ -213,23 +218,24 @@ class IntelliJWorkflowUi(
         }
 
         val fs = LocalFileSystem.getInstance()
-        fs.refreshAndFindFileByNioFile(repoRoot)?.refresh(false, true)
-        GitRepositoryManager.getInstance(project).updateAllRepositories()
-
-        val virtualFiles: List<VirtualFile> = files.mapNotNull { relPath ->
+        val rootVf = fs.refreshAndFindFileByNioFile(repoRoot)
+        rootVf?.refresh(false, true)
+        files.forEach { relPath ->
             fs.refreshAndFindFileByNioFile(repoRoot.resolve(relPath))
         }
+        GitRepositoryManager.getInstance(project).updateAllRepositories()
 
-        runOnEdtAndGet {
-            if (virtualFiles.isNotEmpty()) {
-                AbstractVcsHelper.getInstance(project).showMergeDialog(virtualFiles)
-            } else {
-                IntelliJGitSupport.notify(
-                    project,
-                    "충돌 파일을 IDE에서 열지 못했습니다. Git 도구 창에서 충돌을 해결해 주세요.",
-                    NotificationType.WARNING,
-                )
-            }
+        if (rootVf != null) {
+            val params = GitConflictResolver.Params(project)
+                .setMergeDescription("GitLane 머지 충돌을 해결해 주세요.")
+                .setErrorNotificationTitle("GitLane 머지 충돌 미해결")
+            GitConflictResolver(project, listOf(rootVf), params).mergeNoProceed()
+        } else {
+            IntelliJGitSupport.notify(
+                project,
+                "충돌 파일을 IDE에서 열지 못했습니다. Git 도구 창에서 충돌을 해결해 주세요.",
+                NotificationType.WARNING,
+            )
         }
     }
 

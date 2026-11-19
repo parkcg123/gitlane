@@ -135,6 +135,19 @@ describe('conflictModel unit tests', () => {
     assert.equal(masterLabels.oursLabel, 'master 유지 (운영)');
     assert.equal(masterLabels.theirsLabel, 'develop 적용 (스테이지)');
 
+    const directMasterLabels = getConflictSideLabels(
+      {
+        targetBranch: 'master',
+        sourceBranch: '20261119_hotfix',
+        returnBranch: '20261119_hotfix',
+        deleteSourceOnComplete: true,
+        kind: 'mergeToMaster',
+      },
+      'master'
+    );
+    assert.equal(directMasterLabels.oursLabel, 'master 유지 (운영)');
+    assert.equal(directMasterLabels.theirsLabel, '20261119_hotfix 적용 (내 작업)');
+
     const externalLabels = getConflictSideLabels(undefined, 'feature_x');
     assert.equal(externalLabels.oursLabel, '현재 브랜치 유지 (Ours)');
     assert.equal(externalLabels.theirsLabel, '병합 브랜치 적용 (Theirs)');
@@ -366,5 +379,71 @@ describe('conflict resolution end-to-end git integration', () => {
 
     const done = await service.continueAfterConflict();
     assert.equal(done.status, 'success');
+  });
+
+  it('resolves direct-to-master conflicts when useDevelopBranch is false', async () => {
+    const rootDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gitlane-direct-conflict-')));
+    try {
+      const bareDir = path.join(rootDir, 'origin.git');
+      const seedDir = path.join(rootDir, 'seed');
+      const workDir = path.join(rootDir, 'work');
+      const peerDir = path.join(rootDir, 'peer');
+
+      fs.mkdirSync(bareDir);
+      runGit(bareDir, ['init', '--bare']);
+      runGit(bareDir, ['symbolic-ref', 'HEAD', 'refs/heads/master']);
+
+      runGit(rootDir, ['clone', bareDir, seedDir]);
+      runGit(seedDir, ['config', 'user.name', 'Seed Bot']);
+      runGit(seedDir, ['config', 'user.email', 'seed@example.com']);
+      runGit(seedDir, ['checkout', '-b', 'master']);
+      fs.writeFileSync(path.join(seedDir, 'app.txt'), 'line1\nbase\nline3\n', 'utf8');
+      runGit(seedDir, ['add', 'app.txt']);
+      runGit(seedDir, ['commit', '-m', 'chore: init master only']);
+      runGit(seedDir, ['push', '-u', 'origin', 'master']);
+
+      runGit(rootDir, ['clone', bareDir, workDir]);
+      runGit(workDir, ['config', 'user.name', 'Dev User']);
+      runGit(workDir, ['config', 'user.email', 'dev@example.com']);
+
+      runGit(rootDir, ['clone', bareDir, peerDir]);
+      runGit(peerDir, ['config', 'user.name', 'Peer User']);
+      runGit(peerDir, ['config', 'user.email', 'peer@example.com']);
+
+      const git = new GitClient(workDir);
+      const ui = new MockConflictUI();
+      ui.taskName = 'direct_conflict';
+      const service = new WorkflowService(
+        git,
+        ui,
+        { ...DEFAULT_FLOW_CONFIG, useDevelopBranch: false },
+        FIXED_NOW
+      );
+
+      await service.startTask();
+
+      fs.writeFileSync(path.join(peerDir, 'app.txt'), 'line1\nprod_peer\nline3\n', 'utf8');
+      runGit(peerDir, ['add', 'app.txt']);
+      runGit(peerDir, ['commit', '-m', 'fix: peer master']);
+      runGit(peerDir, ['push', 'origin', 'master']);
+
+      fs.writeFileSync(path.join(workDir, 'app.txt'), 'line1\nmy_direct\nline3\n', 'utf8');
+      runGit(workDir, ['add', 'app.txt']);
+      runGit(workDir, ['commit', '-m', 'fix: my direct']);
+
+      const mergeRes = await service.mergeToDevelop();
+      assert.equal(mergeRes.status, 'conflict');
+      assert.equal(ui.pendingConflict?.kind, 'mergeToMaster');
+      assert.equal(ui.pendingConflict?.targetBranch, 'master');
+
+      await service.resolveConflictFile('app.txt', 'theirs');
+      const done = await service.continueAfterConflict();
+      assert.equal(done.status, 'success');
+      assert.equal(await git.getCurrentBranch(), 'master');
+      assert.equal(await git.branchExistsLocal('20261119_direct_conflict'), false);
+      assert.equal(fs.readFileSync(path.join(workDir, 'app.txt'), 'utf8'), 'line1\nprod_peer\nline3\n'.replace('prod_peer', 'my_direct'));
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
   });
 });

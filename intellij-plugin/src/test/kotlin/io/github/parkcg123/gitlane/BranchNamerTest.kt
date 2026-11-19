@@ -46,5 +46,14 @@ class BranchNamerTest {
         assertTrue(BranchNamer.isProtectedBranch("stage", cfg))
         assertTrue(BranchNamer.isProtectedBranch("main", cfg))
         assertFalse(BranchNamer.isProtectedBranch("20261119-hotfix-cart", cfg))
+
+        val directCfg = FlowConfig(
+            useDevelopBranch = false,
+            developBranch = "stage",
+            masterBranch = "main",
+            separator = "-",
+        )
+        assertFalse(BranchNamer.isProtectedBranch("stage", directCfg))
+        assertTrue(BranchNamer.isProtectedBranch("main", directCfg))
     }
 }

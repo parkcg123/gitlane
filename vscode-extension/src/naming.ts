@@ -80,11 +80,15 @@ export function buildTaskBranchName(
 }
 
 /**
- * Checks whether a branch is a protected base branch (`develop` or `master`).
+ * Checks whether a branch is a protected base branch (`develop` and/or `master`).
  */
 export function isProtectedBranch(
   branch: string,
-  config: Pick<FlowConfig, 'developBranch' | 'masterBranch'>
+  config: Pick<FlowConfig, 'developBranch' | 'masterBranch'> &
+    Partial<Pick<FlowConfig, 'useDevelopBranch'>>
 ): boolean {
+  if (config.useDevelopBranch === false) {
+    return branch === config.masterBranch;
+  }
   return branch === config.developBranch || branch === config.masterBranch;
 }

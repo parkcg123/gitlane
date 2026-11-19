@@ -5,6 +5,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 
 data class FlowConfig(
+    val useDevelopBranch: Boolean = true,
     val developBranch: String = "develop",
     val masterBranch: String = "master",
     val remote: String = "origin",
@@ -13,6 +14,8 @@ data class FlowConfig(
     val returnToDevelopAfterRelease: Boolean = true,
     val useNoFastForwardMerge: Boolean = true,
 ) {
+    fun taskBaseBranch(): String = if (useDevelopBranch) developBranch else masterBranch
+
     companion object {
         const val CONFIG_FILENAME = ".gitlane.json"
 
@@ -52,6 +55,7 @@ data class FlowConfig(
             fun booleanOrNull(key: String): Boolean? = map[key] as? Boolean
 
             return FlowConfig(
+                useDevelopBranch = booleanOrNull("useDevelopBranch") ?: base.useDevelopBranch,
                 developBranch = nonEmptyString("developBranch") ?: base.developBranch,
                 masterBranch = nonEmptyString("masterBranch") ?: base.masterBranch,
                 remote = nonEmptyString("remote") ?: base.remote,

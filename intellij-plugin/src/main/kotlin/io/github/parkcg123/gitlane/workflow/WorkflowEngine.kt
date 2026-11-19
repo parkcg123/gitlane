@@ -146,7 +146,7 @@ class WorkflowEngine(
     }
 
     /**
-     * Action 1: Sync develop and create `YYYYMMDD_<task>` branch.
+     * Action 1: Sync base branch (`develop` or `master` when `useDevelopBranch` is false) and create `YYYYMMDD_<task>` branch.
      */
     fun startTask(): WorkflowResult {
         checkInProgressState()?.let { return it }
@@ -158,8 +158,9 @@ class WorkflowEngine(
             git.stashPush("gitlane: auto-stash before startTask")
         }
 
+        val baseBranch = config.taskBaseBranch()
         val originalBranch = git.getCurrentBranch()
-        syncBranch(config.developBranch)
+        syncBranch(baseBranch)
 
         val today = todayProvider()
         val sep = config.separator.ifEmpty { "_" }
@@ -167,7 +168,7 @@ class WorkflowEngine(
         val rawName = ui.promptTaskName(datePrefix)
 
         if (rawName == null) {
-            if (originalBranch != null && originalBranch != config.developBranch) {
+            if (originalBranch != null && originalBranch != baseBranch) {
                 restoreBranchIfExists(originalBranch)
             }
             return WorkflowResult(WorkflowStatus.CANCELLED, "작업 시작을 취소했습니다.")
@@ -175,7 +176,7 @@ class WorkflowEngine(
 
         val validationError = BranchNamer.validateTaskName(rawName, config.separator)
         if (validationError != null) {
-            if (originalBranch != null && originalBranch != config.developBranch) {
+            if (originalBranch != null && originalBranch != baseBranch) {
                 restoreBranchIfExists(originalBranch)
             }
             ui.showError(validationError)
@@ -186,7 +187,7 @@ class WorkflowEngine(
 
         if (git.branchExistsLocal(taskBranch)) {
             if (!ui.confirmExistingBranch(taskBranch)) {
-                if (originalBranch != null && originalBranch != config.developBranch) {
+                if (originalBranch != null && originalBranch != baseBranch) {
                     restoreBranchIfExists(originalBranch)
                 }
                 return WorkflowResult(WorkflowStatus.CANCELLED, "작업 시작을 취소했습니다.")
@@ -198,26 +199,29 @@ class WorkflowEngine(
         }
 
         git.checkoutNewBranch(taskBranch)
-        val msg = "새 작업 브랜치 '${taskBranch}'를 '${config.developBranch}'에서 생성했습니다."
+        val msg = "새 작업 브랜치 '${taskBranch}'를 '${baseBranch}'에서 생성했습니다."
         ui.showInfo(msg)
         return WorkflowResult(WorkflowStatus.SUCCESS, msg, branch = taskBranch)
     }
 
     /**
-     * Action 2: Merge current task branch into develop and push.
+     * Action 2: Merge current task branch into target base branch (`develop`, or `master` when `useDevelopBranch` is false) and push.
      */
     fun mergeToDevelop(): WorkflowResult {
         checkInProgressState()?.let { return it }
 
+        val targetBranch = config.taskBaseBranch()
+        val actionLabel = if (config.useDevelopBranch) "스테이지 반영" else "운영 반영"
+
         val taskBranch = git.getCurrentBranch()
         if (taskBranch == null) {
-            val msg = "Detached HEAD 상태에서는 스테이지 반영을 진행할 수 없습니다."
+            val msg = "Detached HEAD 상태에서는 ${actionLabel}을 진행할 수 없습니다."
             ui.showWarning(msg)
             return WorkflowResult(WorkflowStatus.BLOCKED, msg)
         }
 
         if (BranchNamer.isProtectedBranch(taskBranch, config)) {
-            val msg = "보호 브랜치('$taskBranch')에서는 스테이지 반영을 실행할 수 없습니다. 작업 브랜치로 이동해 주세요."
+            val msg = "보호 브랜치('$taskBranch')에서는 ${actionLabel}을 실행할 수 없습니다. 작업 브랜치로 이동해 주세요."
             ui.showWarning(msg)
             return WorkflowResult(WorkflowStatus.BLOCKED, msg)
         }
@@ -228,37 +232,42 @@ class WorkflowEngine(
             return WorkflowResult(WorkflowStatus.BLOCKED, msg)
         }
 
-        syncBranch(config.developBranch)
-        val aheadCommits = git.getAheadCommits(config.developBranch, taskBranch)
+        syncBranch(targetBranch)
+        val aheadCommits = git.getAheadCommits(targetBranch, taskBranch)
 
         if (aheadCommits.isEmpty()) {
             git.checkout(taskBranch)
-            val msg = "${config.developBranch}에 병합할 새 커밋이 없습니다."
+            val msg = "${targetBranch}에 병합할 새 커밋이 없습니다."
             ui.showInfo(msg)
             return WorkflowResult(WorkflowStatus.NOOP, msg, branch = taskBranch)
         }
 
-        val choice = ui.confirmMergeToDevelop(taskBranch, config.developBranch, aheadCommits.size)
+        val choice = ui.confirmMergeToDevelop(taskBranch, targetBranch, aheadCommits.size)
         if (choice == MergeToDevelopChoice.CANCEL) {
             git.checkout(taskBranch)
-            return WorkflowResult(WorkflowStatus.CANCELLED, "스테이지 반영을 취소했습니다.", branch = taskBranch)
+            return WorkflowResult(WorkflowStatus.CANCELLED, "${actionLabel}을 취소했습니다.", branch = taskBranch)
         }
 
         val mergeResult = git.merge(taskBranch, config.useNoFastForwardMerge)
         if (mergeResult.conflicted) {
+            val conflictKind = if (config.useDevelopBranch) {
+                PendingConflictContext.KIND_MERGE_TO_DEVELOP
+            } else {
+                PendingConflictContext.KIND_MERGE_TO_MASTER
+            }
             return handleMergeConflict(
                 PendingConflictContext(
-                    targetBranch = config.developBranch,
+                    targetBranch = targetBranch,
                     sourceBranch = taskBranch,
                     returnBranch = taskBranch,
                     deleteSourceOnComplete = choice == MergeToDevelopChoice.DELETE,
-                    kind = PendingConflictContext.KIND_MERGE_TO_DEVELOP,
+                    kind = conflictKind,
                 ),
                 mergeResult.conflictedFiles,
             )
         }
 
-        val pushed = pushIfRemoteExists(config.developBranch)
+        val pushed = pushIfRemoteExists(targetBranch)
 
         if (choice == MergeToDevelopChoice.DELETE) {
             cleanupTaskBranch(taskBranch)
@@ -273,12 +282,12 @@ class WorkflowEngine(
         } else {
             ", '$taskBranch' 유지"
         }
-        val msg = "'$taskBranch' → '${config.developBranch}' 병합${pushSuffix} 완료$branchSuffix"
+        val msg = "'$taskBranch' → '${targetBranch}' 병합${pushSuffix} 완료$branchSuffix"
         ui.showInfo(msg)
         return WorkflowResult(
             status = WorkflowStatus.SUCCESS,
             message = msg,
-            branch = if (choice == MergeToDevelopChoice.DELETE) config.developBranch else taskBranch,
+            branch = if (choice == MergeToDevelopChoice.DELETE) targetBranch else taskBranch,
         )
     }
 
@@ -287,6 +296,12 @@ class WorkflowEngine(
      */
     fun releaseToMaster(): WorkflowResult {
         checkInProgressState()?.let { return it }
+
+        if (!config.useDevelopBranch) {
+            val msg = "현재 저장소는 develop 브랜치를 사용하지 않는 모드(useDevelopBranch: false)입니다. 작업 브랜치에서 운영 바로 반영을 실행해 주세요."
+            ui.showWarning(msg)
+            return WorkflowResult(WorkflowStatus.BLOCKED, msg)
+        }
 
         if (git.hasUncommittedChanges()) {
             val msg = "커밋되지 않은 변경사항이 있습니다. 먼저 커밋하거나 Stash한 뒤 다시 시도해 주세요."
@@ -411,7 +426,10 @@ class WorkflowEngine(
         val pushed = targetBranch?.let { pushIfRemoteExists(it) } ?: false
 
         var finalBranch = targetBranch
-        if (ctx?.kind == PendingConflictContext.KIND_MERGE_TO_DEVELOP) {
+        if (
+            ctx?.kind == PendingConflictContext.KIND_MERGE_TO_DEVELOP ||
+            ctx?.kind == PendingConflictContext.KIND_MERGE_TO_MASTER
+        ) {
             if (ctx.deleteSourceOnComplete) {
                 cleanupTaskBranch(ctx.sourceBranch)
             } else {

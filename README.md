@@ -42,14 +42,14 @@ gitlane/
 
 ### 1. VS Code 확장 (`vscode-extension/`)
 
-* **마켓플레이스 설치** *(게시 후)*: VS Code Extensions(`Cmd+Shift+X`)에서 `GitLane` 검색 후 설치 (또는 `code --install-extension pck.gitlane`)
+* **마켓플레이스 설치** *(게시 후)*: VS Code Extensions(`Cmd+Shift+X`)에서 `GitLane Flow` 검색 후 설치 (또는 `code --install-extension pck.gitlane-flow`)
 * **로컬 `.vsix` 파일 설치**:
   ```bash
   cd vscode-extension
   npm install
   npm run compile
-  npm run package   # gitlane-0.1.0.vsix 생성
-  code --install-extension gitlane-0.1.0.vsix
+  npm run package   # gitlane-flow-0.2.0.vsix 생성
+  code --install-extension gitlane-flow-0.2.0.vsix
   ```
   또는 VS Code **Extensions** → `...` → **Install from VSIX...** 에서 `.vsix` 파일을 선택합니다.
 
@@ -60,7 +60,7 @@ gitlane/
   * 요구 환경: **JDK 21**, **IntelliJ IDEA `2024.2+`** (`Git4Idea` 번들 플러그인 활성)
   ```bash
   cd intellij-plugin
-  ./gradlew buildPlugin  # build/distributions/gitlane-intellij-0.1.0.zip 생성
+  ./gradlew buildPlugin  # build/distributions/gitlane-intellij-0.2.0.zip 생성
   ```
   IntelliJ IDEA **Settings → Plugins → ⚙ → Install Plugin from Disk...** 에서 생성된 `.zip` 파일을 선택하고 IDE를 재시작합니다.
 
@@ -71,6 +71,7 @@ gitlane/
 ```json
 {
   "$schema": "./spec/gitlane.schema.json",
+  "useDevelopBranch": true,
   "developBranch": "develop",
   "masterBranch": "master",
   "remote": "origin",
@@ -80,6 +81,8 @@ gitlane/
   "useNoFastForwardMerge": true
 }
 ```
+
+> **`develop` 없이 `master`(또는 `main`)로 바로 병합**하려면 `.gitlane.json`에 `"useDevelopBranch": false`를 추가하세요 (`"masterBranch": "main"` 등과 함께 사용 가능).
 
 ## 개발 빌드 및 테스트
 

@@ -1,8 +1,8 @@
 {
-  "name": "gitlane",
-  "displayName": "GitLane",
+  "name": "gitlane-flow",
+  "displayName": "GitLane Flow",
   "description": "팀 공용 초간단 Git 워크플로우 (develop → YYYYMMDD_작업명 → develop → master)",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "pck",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -93,6 +93,11 @@
     "configuration": {
       "title": "GitLane",
       "properties": {
+        "gitlane.useDevelopBranch": {
+          "type": "boolean",
+          "default": true,
+          "description": "스테이지(develop) 브랜치 사용 여부. false로 설정하면 작업 브랜치를 master 브랜치에서 분기하고 바로 병합합니다."
+        },
         "gitlane.developBranch": {
           "type": "string",
           "default": "develop",

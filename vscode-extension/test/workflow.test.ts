@@ -353,4 +353,87 @@ describe('WorkflowService end-to-end git integration', () => {
       'line1\npeer_and_my_change\nline3\n'
     );
   });
+
+  it('supports direct-to-master workflow without develop when useDevelopBranch is false', async () => {
+    const rootDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gitlane-direct-e2e-')));
+    try {
+      const bareDir = path.join(rootDir, 'origin.git');
+      const seedDir = path.join(rootDir, 'seed');
+      const workDir = path.join(rootDir, 'work');
+      const peerDir = path.join(rootDir, 'peer');
+
+      fs.mkdirSync(bareDir);
+      runGit(bareDir, ['init', '--bare']);
+      runGit(bareDir, ['symbolic-ref', 'HEAD', 'refs/heads/master']);
+
+      runGit(rootDir, ['clone', bareDir, seedDir]);
+      runGit(seedDir, ['config', 'user.name', 'Seed Bot']);
+      runGit(seedDir, ['config', 'user.email', 'seed@example.com']);
+      runGit(seedDir, ['checkout', '-b', 'master']);
+      fs.writeFileSync(path.join(seedDir, 'app.txt'), 'base\n', 'utf8');
+      runGit(seedDir, ['add', 'app.txt']);
+      runGit(seedDir, ['commit', '-m', 'chore: init master']);
+      runGit(seedDir, ['push', '-u', 'origin', 'master']);
+
+      runGit(rootDir, ['clone', bareDir, workDir]);
+      runGit(workDir, ['config', 'user.name', 'Dev User']);
+      runGit(workDir, ['config', 'user.email', 'dev@example.com']);
+
+      runGit(rootDir, ['clone', bareDir, peerDir]);
+      runGit(peerDir, ['config', 'user.name', 'Peer User']);
+      runGit(peerDir, ['config', 'user.email', 'peer@example.com']);
+
+      const git = new GitClient(workDir);
+      const ui = new MockWorkflowUI();
+      const service = new WorkflowService(
+        git,
+        ui,
+        { ...DEFAULT_FLOW_CONFIG, useDevelopBranch: false },
+        FIXED_NOW
+      );
+
+      // releaseToMaster is blocked in direct mode
+      const blockedRelease = await service.releaseToMaster();
+      assert.equal(blockedRelease.status, 'blocked');
+
+      // startTask forks from master
+      ui.onPromptTaskName = () => 'direct_hotfix';
+      const started = await service.startTask();
+      assert.equal(started.status, 'success');
+      assert.equal(started.branch, '20261119_direct_hotfix');
+      assert.equal(await git.getCurrentBranch(), '20261119_direct_hotfix');
+
+      // Delete mode merges straight into master and pushes origin/master
+      fs.writeFileSync(path.join(workDir, 'hotfix.txt'), 'fixed\n', 'utf8');
+      runGit(workDir, ['add', 'hotfix.txt']);
+      runGit(workDir, ['commit', '-m', 'fix: direct hotfix']);
+
+      ui.onConfirmMergeToDevelop = () => 'delete';
+      const mergedDelete = await service.mergeToDevelop();
+      assert.equal(mergedDelete.status, 'success');
+      assert.equal(mergedDelete.branch, 'master');
+      assert.equal(await git.getCurrentBranch(), 'master');
+      assert.equal(await git.branchExistsLocal('20261119_direct_hotfix'), false);
+      assert.equal(
+        runGit(workDir, ['rev-parse', 'master']),
+        runGit(workDir, ['rev-parse', 'origin/master'])
+      );
+
+      // Keep mode merges into master and returns to task branch
+      ui.onPromptTaskName = () => 'direct_keep';
+      await service.startTask();
+      fs.writeFileSync(path.join(workDir, 'keep.txt'), 'keep\n', 'utf8');
+      runGit(workDir, ['add', 'keep.txt']);
+      runGit(workDir, ['commit', '-m', 'feat: keep branch']);
+
+      ui.onConfirmMergeToDevelop = () => 'keep';
+      const mergedKeep = await service.mergeToDevelop();
+      assert.equal(mergedKeep.status, 'success');
+      assert.equal(mergedKeep.branch, '20261119_direct_keep');
+      assert.equal(await git.getCurrentBranch(), '20261119_direct_keep');
+      assert.equal(await git.branchExistsLocal('20261119_direct_keep'), true);
+    } finally {
+      fs.rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
 });

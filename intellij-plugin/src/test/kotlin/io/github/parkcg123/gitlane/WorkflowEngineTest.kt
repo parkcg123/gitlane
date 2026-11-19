@@ -275,4 +275,92 @@ class WorkflowEngineTest {
             runGit(fixture.work, "rev-parse", "origin/develop"),
         )
     }
+
+    @Test
+    fun `direct-to-master mode forks from master, merges directly, and resolves conflicts without develop`(@TempDir root: Path) {
+        val origin = root.resolve("origin.git")
+        val seed = root.resolve("seed")
+        val work = root.resolve("work")
+        val peer = root.resolve("peer")
+
+        Files.createDirectories(origin)
+        runGit(origin, "init", "--bare")
+
+        runGit(root, "clone", origin.toString(), seed.toString())
+        runGit(seed, "config", "user.email", "test@example.com")
+        runGit(seed, "config", "user.name", "Test User")
+        Files.writeString(seed.resolve("app.txt"), "initial\n")
+        runGit(seed, "add", "app.txt")
+        runGit(seed, "commit", "-m", "initial commit")
+        runGit(seed, "checkout", "-B", "master")
+        runGit(seed, "push", "-u", "origin", "master")
+
+        runGit(root, "clone", "-b", "master", origin.toString(), work.toString())
+        runGit(work, "config", "user.email", "dev@example.com")
+        runGit(work, "config", "user.name", "Dev User")
+
+        runGit(root, "clone", "-b", "master", origin.toString(), peer.toString())
+        runGit(peer, "config", "user.email", "peer@example.com")
+        runGit(peer, "config", "user.name", "Peer User")
+
+        val git = GitRunner(work)
+        val ui = ScriptedUi(taskName = "direct_fix", mergeChoice = MergeToDevelopChoice.DELETE)
+        val engine = WorkflowEngine(git, ui, FlowConfig(useDevelopBranch = false)) { fixedDate }
+
+        // releaseToMaster is blocked when develop is disabled
+        val blockedRelease = engine.releaseToMaster()
+        assertEquals(WorkflowStatus.BLOCKED, blockedRelease.status)
+
+        // Start task directly from master
+        val started = engine.startTask()
+        assertEquals(WorkflowStatus.SUCCESS, started.status)
+        assertEquals("20261119_direct_fix", git.getCurrentBranch())
+
+        // Clean direct merge into master
+        Files.writeString(work.resolve("direct.txt"), "direct feature\n")
+        runGit(work, "add", "direct.txt")
+        runGit(work, "commit", "-m", "feat: direct change")
+
+        val merged = engine.mergeToDevelop()
+        assertEquals(WorkflowStatus.SUCCESS, merged.status)
+        assertEquals("master", merged.branch)
+        assertEquals("master", git.getCurrentBranch())
+        assertFalse(git.branchExistsLocal("20261119_direct_fix"))
+        assertEquals(
+            runGit(work, "rev-parse", "master"),
+            runGit(work, "rev-parse", "origin/master"),
+        )
+
+        // Direct-to-master conflict + resolve + continue
+        ui.taskName = "direct_conflict"
+        ui.conflictAction = ConflictPromptChoice.LATER
+        engine.startTask()
+        Files.writeString(work.resolve("app.txt"), "task direct edit\n")
+        runGit(work, "add", "app.txt")
+        runGit(work, "commit", "-m", "fix: task direct edit")
+
+        runGit(peer, "pull", "--ff-only", "origin", "master")
+        Files.writeString(peer.resolve("app.txt"), "peer master edit\n")
+        runGit(peer, "add", "app.txt")
+        runGit(peer, "commit", "-m", "fix: peer master edit")
+        runGit(peer, "push", "origin", "master")
+
+        val conflicted = engine.mergeToDevelop()
+        assertEquals(WorkflowStatus.CONFLICT, conflicted.status)
+        assertEquals(PendingConflictContext.KIND_MERGE_TO_MASTER, ui.getPendingConflict()?.kind)
+        assertEquals("master", ui.getPendingConflict()?.targetBranch)
+
+        Files.writeString(work.resolve("app.txt"), "resolved direct edit\n")
+        runGit(work, "add", "app.txt")
+
+        val completed = engine.continueAfterConflict()
+        assertEquals(WorkflowStatus.SUCCESS, completed.status)
+        assertEquals("master", git.getCurrentBranch())
+        assertFalse(git.branchExistsLocal("20261119_direct_conflict"))
+        assertNull(ui.getPendingConflict())
+        assertEquals(
+            runGit(work, "rev-parse", "master"),
+            runGit(work, "rev-parse", "origin/master"),
+        )
+    }
 }

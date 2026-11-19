@@ -1,4 +1,4 @@
-import type { FlowConfig } from './config';
+import { FlowConfig, getTaskBaseBranch } from './config';
 import { GitClient } from './git';
 import { buildTaskBranchName, formatLocalDate, isProtectedBranch, validateTaskName } from './naming';
 
@@ -7,7 +7,7 @@ export interface PendingConflictContext {
   sourceBranch: string;
   returnBranch: string;
   deleteSourceOnComplete: boolean;
-  kind: 'mergeToDevelop' | 'releaseToMaster';
+  kind: 'mergeToDevelop' | 'mergeToMaster' | 'releaseToMaster';
   initialConflictedFiles?: string[];
 }
 
@@ -151,7 +151,7 @@ export class WorkflowService {
   }
 
   /**
-   * Action 1: Sync develop and create `YYYYMMDD_<task>` branch.
+   * Action 1: Sync base branch (`develop` or `master` when `useDevelopBranch` is false) and create `YYYYMMDD_<task>` branch.
    */
   async startTask(): Promise<WorkflowResult> {
     const blocked = await this.checkInProgressState();
@@ -167,15 +167,16 @@ export class WorkflowService {
       await this.git.stashPush('gitlane: auto-stash before startTask');
     }
 
+    const baseBranch = getTaskBaseBranch(this.config);
     const originalBranch = await this.git.getCurrentBranch();
-    await this.syncBranch(this.config.developBranch);
+    await this.syncBranch(baseBranch);
 
     const now = this.nowProvider();
     const datePrefix = `${formatLocalDate(now)}${this.config.separator || '_'}`;
     const rawName = await this.ui.promptTaskName(datePrefix);
 
     if (rawName === undefined) {
-      if (originalBranch && originalBranch !== this.config.developBranch) {
+      if (originalBranch && originalBranch !== baseBranch) {
         await this.restoreBranchIfExists(originalBranch);
       }
       return { status: 'cancelled', message: '작업 시작을 취소했습니다.' };
@@ -183,7 +184,7 @@ export class WorkflowService {
 
     const validationError = validateTaskName(rawName, this.config.separator);
     if (validationError) {
-      if (originalBranch && originalBranch !== this.config.developBranch) {
+      if (originalBranch && originalBranch !== baseBranch) {
         await this.restoreBranchIfExists(originalBranch);
       }
       await this.ui.showError(validationError);
@@ -195,7 +196,7 @@ export class WorkflowService {
     if (await this.git.branchExistsLocal(taskBranch)) {
       const existingChoice = await this.ui.confirmExistingBranch(taskBranch);
       if (existingChoice === 'cancel') {
-        if (originalBranch && originalBranch !== this.config.developBranch) {
+        if (originalBranch && originalBranch !== baseBranch) {
           await this.restoreBranchIfExists(originalBranch);
         }
         return { status: 'cancelled', message: '작업 시작을 취소했습니다.' };
@@ -207,13 +208,13 @@ export class WorkflowService {
     }
 
     await this.git.checkoutNewBranch(taskBranch);
-    const msg = `새 작업 브랜치 '${taskBranch}'를 '${this.config.developBranch}'에서 생성했습니다.`;
+    const msg = `새 작업 브랜치 '${taskBranch}'를 '${baseBranch}'에서 생성했습니다.`;
     await this.ui.showInfo(msg);
     return { status: 'success', branch: taskBranch, message: msg };
   }
 
   /**
-   * Action 2: Merge current task branch into develop and push.
+   * Action 2: Merge current task branch into target base branch (`develop`, or `master` when `useDevelopBranch` is false) and push.
    */
   async mergeToDevelop(): Promise<WorkflowResult> {
     const blocked = await this.checkInProgressState();
@@ -221,15 +222,18 @@ export class WorkflowService {
       return blocked;
     }
 
+    const targetBranch = getTaskBaseBranch(this.config);
+    const actionLabel = this.config.useDevelopBranch ? '스테이지 반영' : '운영 반영';
+
     const taskBranch = await this.git.getCurrentBranch();
     if (!taskBranch) {
-      const msg = 'Detached HEAD 상태에서는 스테이지 반영을 진행할 수 없습니다.';
+      const msg = `Detached HEAD 상태에서는 ${actionLabel}을 진행할 수 없습니다.`;
       await this.ui.showWarning(msg);
       return { status: 'blocked', message: msg };
     }
 
     if (isProtectedBranch(taskBranch, this.config)) {
-      const msg = `보호 브랜치('${taskBranch}')에서는 스테이지 반영을 실행할 수 없습니다. 작업 브랜치로 이동해 주세요.`;
+      const msg = `보호 브랜치('${taskBranch}')에서는 ${actionLabel}을 실행할 수 없습니다. 작업 브랜치로 이동해 주세요.`;
       await this.ui.showWarning(msg);
       return { status: 'blocked', message: msg };
     }
@@ -240,43 +244,43 @@ export class WorkflowService {
       return { status: 'blocked', message: msg };
     }
 
-    await this.syncBranch(this.config.developBranch);
-    const aheadCommits = await this.git.getAheadCommits(this.config.developBranch, taskBranch);
+    await this.syncBranch(targetBranch);
+    const aheadCommits = await this.git.getAheadCommits(targetBranch, taskBranch);
 
     if (aheadCommits.length === 0) {
       await this.git.checkout(taskBranch);
-      const msg = `${this.config.developBranch}에 병합할 새 커밋이 없습니다.`;
+      const msg = `${targetBranch}에 병합할 새 커밋이 없습니다.`;
       await this.ui.showInfo(msg);
       return { status: 'noop', branch: taskBranch, message: msg };
     }
 
     const choice = await this.ui.confirmMergeToDevelop(
       taskBranch,
-      this.config.developBranch,
+      targetBranch,
       aheadCommits.length
     );
 
     if (choice === 'cancel') {
       await this.git.checkout(taskBranch);
-      return { status: 'cancelled', branch: taskBranch, message: '스테이지 반영을 취소했습니다.' };
+      return { status: 'cancelled', branch: taskBranch, message: `${actionLabel}을 취소했습니다.` };
     }
 
     const mergeResult = await this.git.merge(taskBranch, this.config.useNoFastForwardMerge);
     if (mergeResult.conflicted) {
       return this.handleMergeConflict(
         {
-          targetBranch: this.config.developBranch,
+          targetBranch,
           sourceBranch: taskBranch,
           returnBranch: taskBranch,
           deleteSourceOnComplete: choice === 'delete',
-          kind: 'mergeToDevelop',
+          kind: this.config.useDevelopBranch ? 'mergeToDevelop' : 'mergeToMaster',
           initialConflictedFiles: mergeResult.conflictedFiles,
         },
         mergeResult.conflictedFiles
       );
     }
 
-    const pushed = await this.pushIfRemoteExists(this.config.developBranch);
+    const pushed = await this.pushIfRemoteExists(targetBranch);
 
     if (choice === 'delete') {
       await this.cleanupTaskBranch(taskBranch);
@@ -287,11 +291,11 @@ export class WorkflowService {
     await this.ui.setPendingConflict(undefined);
     const pushSuffix = pushed ? ' 및 푸시' : ' (로컬 전용)';
     const branchSuffix = choice === 'delete' ? `, '${taskBranch}' 삭제` : `, '${taskBranch}' 유지`;
-    const msg = `'${taskBranch}' → '${this.config.developBranch}' 병합${pushSuffix} 완료${branchSuffix}`;
+    const msg = `'${taskBranch}' → '${targetBranch}' 병합${pushSuffix} 완료${branchSuffix}`;
     await this.ui.showInfo(msg);
     return {
       status: 'success',
-      branch: choice === 'delete' ? this.config.developBranch : taskBranch,
+      branch: choice === 'delete' ? targetBranch : taskBranch,
       message: msg,
     };
   }
@@ -303,6 +307,13 @@ export class WorkflowService {
     const blocked = await this.checkInProgressState();
     if (blocked) {
       return blocked;
+    }
+
+    if (!this.config.useDevelopBranch) {
+      const msg =
+        '현재 저장소는 develop 브랜치를 사용하지 않는 모드(useDevelopBranch: false)입니다. 작업 브랜치에서 운영 바로 반영을 실행해 주세요.';
+      await this.ui.showWarning(msg);
+      return { status: 'blocked', message: msg };
     }
 
     if (await this.git.hasUncommittedChanges()) {
@@ -426,7 +437,7 @@ export class WorkflowService {
     const pushed = targetBranch ? await this.pushIfRemoteExists(targetBranch) : false;
 
     let finalBranch = targetBranch ?? undefined;
-    if (ctx?.kind === 'mergeToDevelop') {
+    if (ctx?.kind === 'mergeToDevelop' || ctx?.kind === 'mergeToMaster') {
       if (ctx.deleteSourceOnComplete) {
         await this.cleanupTaskBranch(ctx.sourceBranch);
       } else {

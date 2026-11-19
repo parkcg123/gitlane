@@ -22,7 +22,7 @@ export interface ConflictPanelState {
   targetBranch: string;
   sourceBranch: string;
   returnBranch: string;
-  kind: 'mergeToDevelop' | 'releaseToMaster' | 'external';
+  kind: 'mergeToDevelop' | 'mergeToMaster' | 'releaseToMaster' | 'external';
   deleteSourceOnComplete: boolean;
   labels: ConflictSideLabels;
   files: ConflictFileItem[];
@@ -76,6 +76,15 @@ export function getConflictSideLabels(
       oursLabel: `${context.targetBranch} 유지 (스테이지)`,
       theirsLabel: `${context.sourceBranch} 적용 (내 작업)`,
       oursTooltip: `스테이지(${context.targetBranch}) 브랜치의 내용을 그대로 유지하고 Stage 처리합니다 (--ours).`,
+      theirsTooltip: `내 작업(${context.sourceBranch}) 브랜치의 내용으로 덮어쓰고 Stage 처리합니다 (--theirs).`,
+    };
+  }
+
+  if (context?.kind === 'mergeToMaster') {
+    return {
+      oursLabel: `${context.targetBranch} 유지 (운영)`,
+      theirsLabel: `${context.sourceBranch} 적용 (내 작업)`,
+      oursTooltip: `운영(${context.targetBranch}) 브랜치의 내용을 그대로 유지하고 Stage 처리합니다 (--ours).`,
       theirsTooltip: `내 작업(${context.sourceBranch}) 브랜치의 내용으로 덮어쓰고 Stage 처리합니다 (--theirs).`,
     };
   }

@@ -6,7 +6,8 @@
     <description><![CDATA[
         <p>
             A streamlined, guarded Git workflow plugin for teams following the
-            <b>develop → YYYYMMDD_task → develop → master</b> lane.
+            <b>develop → YYYYMMDD_task → develop → master</b> lane (or direct
+            <b>master → YYYYMMDD_task → master</b> via <code>useDevelopBranch: false</code>).
             Works identically alongside the GitLane VS Code extension via a shared
             <code>.gitlane.json</code> repository configuration.
         </p>
@@ -21,6 +22,8 @@
 
     <change-notes><![CDATA[
         <ul>
+            <li><b>0.2.0</b>: Added <code>useDevelopBranch</code> option (<code>.gitlane.json</code>) to support branching from and merging directly into <code>master</code> without a <code>develop</code> branch.</li>
+            <li><b>0.1.1</b>: Replaced deprecated <code>AbstractVcsHelper.showMergeDialog</code> with <code>GitConflictResolver</code> for full IntelliJ IDEA 2026.2+ compatibility.</li>
             <li><b>0.1.0</b>: Initial release of GitLane with Start Task, Merge to develop, Release to master, native 3-Way Merge conflict workflow, and real-time Status Bar widget.</li>
         </ul>
     ]]></change-notes>

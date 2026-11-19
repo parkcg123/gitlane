@@ -24,6 +24,7 @@ class FlowConfigTest {
             tempDir.resolve(FlowConfig.CONFIG_FILENAME),
             """
             {
+              "useDevelopBranch": false,
               "developBranch": "stage",
               "masterBranch": "main",
               "remote": "upstream",
@@ -37,6 +38,7 @@ class FlowConfigTest {
 
         val loaded = FlowConfig.loadWithWarning(tempDir)
         assertNull(loaded.warning)
+        assertFalse(loaded.config.useDevelopBranch)
         assertEquals("stage", loaded.config.developBranch)
         assertEquals("main", loaded.config.masterBranch)
         assertEquals("upstream", loaded.config.remote)

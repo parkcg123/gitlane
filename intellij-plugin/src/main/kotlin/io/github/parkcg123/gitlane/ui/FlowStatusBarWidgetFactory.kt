@@ -103,13 +103,25 @@ private class FlowStatusBarWidget(private val project: Project) :
                 else -> {
                     val branch = git.getCurrentBranch()
                         ?: return "GitLane: HEAD 분리됨" to "Detached HEAD 상태입니다. 브랜치를 확인해 주세요."
-                    when (branch) {
-                        config.masterBranch ->
-                            "GitLane: $branch (운영)" to "운영 브랜치($branch) — 클릭하여 GitLane 메뉴 열기"
-                        config.developBranch ->
+                    when {
+                        branch == config.masterBranch -> {
+                            val tooltip = if (config.useDevelopBranch) {
+                                "운영 브랜치($branch) — 클릭하여 GitLane 메뉴 열기"
+                            } else {
+                                "운영 브랜치($branch) — 클릭하여 작업 시작 또는 GitLane 메뉴 열기"
+                            }
+                            "GitLane: $branch (운영)" to tooltip
+                        }
+                        config.useDevelopBranch && branch == config.developBranch ->
                             "GitLane: $branch (스테이지)" to "스테이지 브랜치($branch) — 클릭하여 작업 시작 또는 운영 반영 실행"
-                        else ->
-                            "GitLane: $branch" to "작업 브랜치($branch) — 클릭하여 스테이지 반영 또는 메뉴 열기"
+                        else -> {
+                            val tooltip = if (config.useDevelopBranch) {
+                                "작업 브랜치($branch) — 클릭하여 스테이지 반영 또는 메뉴 열기"
+                            } else {
+                                "작업 브랜치($branch) — 클릭하여 ${config.masterBranch} 바로 병합 또는 메뉴 열기"
+                            }
+                            "GitLane: $branch" to tooltip
+                        }
                     }
                 }
             }

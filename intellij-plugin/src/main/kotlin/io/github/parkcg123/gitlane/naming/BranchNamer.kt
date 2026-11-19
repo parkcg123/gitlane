@@ -67,6 +67,10 @@ object BranchNamer {
     }
 
     fun isProtectedBranch(branch: String, config: FlowConfig): Boolean {
-        return branch == config.developBranch || branch == config.masterBranch
+        return if (config.useDevelopBranch) {
+            branch == config.developBranch || branch == config.masterBranch
+        } else {
+            branch == config.masterBranch
+        }
     }
 }

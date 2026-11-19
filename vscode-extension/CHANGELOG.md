@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.0] - 2026-11-19
+
+### Added
+- `useDevelopBranch` option (both `.gitlane.json` and `gitlane.useDevelopBranch` setting, default `true`): set to `false` to fork task branches from `master` (or `main`) and merge directly back into `master` without requiring a `develop` branch.
+- Dynamic quick-pick menu, conflict labels (`mergeToMaster`), and status bar tooltips tailored for direct-to-master repositories.
+
 ## [0.1.0] - 2026-11-19
 
 ### Added

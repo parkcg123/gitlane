@@ -40,14 +40,14 @@ git push -u origin main
 
 ## 3. Open VSX Registry 등록 (Cursor / Windsurf 등 지원)
 
-1. [open-vsx.org](https://open-vsx.org)에 GitHub 계정으로 로그인합니다.
-2. 프로필 설정에서 **Eclipse Contributor Agreement (ECA)** 서명을 완료합니다.
+1. [Eclipse Foundation 계정](https://accounts.eclipse.org/user/register)을 생성하고 프로필의 **GitHub Username**에 GitHub 아이디(`parkcg123`)를 등록합니다.
+2. [open-vsx.org](https://open-vsx.org)에 GitHub 계정으로 로그인한 뒤 [프로필 설정](https://open-vsx.org/user-settings/profile)에서 **Log in with Eclipse**로 계정을 연동하고 **Show Publisher Agreement → Agree**를 완료합니다 *(반영까지 최대 5~15분 소요 가능)*.
 3. Access Token 페이지에서 새 토큰을 발급합니다 (`OVSX_PAT`).
 4. 사용하는 Publisher 네임스페이스를 생성합니다 (최초 1회):
    ```bash
    cd vscode-extension
    npx ovsx create-namespace pck -p <OVSX_PAT>
-   npx ovsx publish gitlane-0.1.0.vsix -p <OVSX_PAT>
+   npx ovsx publish gitlane-flow-0.2.0.vsix -p <OVSX_PAT>
    ```
    > `package.json`의 `"publisher"`를 다른 ID로 바꿨다면 `create-namespace` 이름도 똑같이 맞춰 주세요.
 
@@ -61,10 +61,10 @@ JetBrains Marketplace는 **최초 1회 웹 업로드를 통한 심사**가 필�
    ```bash
    cd intellij-plugin
    ./gradlew buildPlugin
-   # 결과물: intellij-plugin/build/distributions/gitlane-intellij-0.1.0.zip
+   # 결과물: intellij-plugin/build/distributions/gitlane-intellij-0.2.0.zip
    ```
 2. [JetBrains Marketplace](https://plugins.jetbrains.com)에 JetBrains 계정으로 로그인 → **Upload Plugin** 선택:
-   * `gitlane-intellij-0.1.0.zip` 업로드
+   * `gitlane-intellij-0.2.0.zip` 업로드
    * 라이선스: **MIT**, 카테고리: **Version Control Systems** / **Git**, 소스 저장소: `https://github.com/parkcg123/gitlane` 입력 후 제출
    * 최초 심사는 보통 **1~3영업일** 소요됩니다.
 3. 승인 완료 후 JetBrains Marketplace 프로필 → **My Tokens** → **Generate New Token**으로 배포 토큰을 발급합니다 (`JETBRAINS_MARKETPLACE_TOKEN`).
