@@ -21,6 +21,12 @@ enum class MergeTargetChoice {
     CANCEL,
 }
 
+enum class StartBaseChoice {
+    DEVELOP,
+    MASTER,
+    CANCEL,
+}
+
 enum class MergeToDevelopChoice {
     DELETE,
     KEEP,
@@ -41,6 +47,7 @@ data class WorkflowResult(
 )
 
 interface WorkflowUi {
+    fun promptStartBaseBranch(developBranch: String, masterBranch: String): StartBaseChoice
     fun promptTaskName(datePrefix: String): String?
     fun confirmDirtyStart(): Boolean
     fun confirmPopStash(taskBranch: String): Boolean
@@ -194,6 +201,16 @@ class WorkflowEngine(
     fun startTask(): WorkflowResult {
         checkInProgressState()?.let { return it }
 
+        val baseBranch = if (config.useDevelopBranch && config.developBranch != config.masterBranch) {
+            when (ui.promptStartBaseBranch(config.developBranch, config.masterBranch)) {
+                StartBaseChoice.DEVELOP -> config.developBranch
+                StartBaseChoice.MASTER -> config.masterBranch
+                StartBaseChoice.CANCEL -> return WorkflowResult(WorkflowStatus.CANCELLED, "작업 시작을 취소했습니다.")
+            }
+        } else {
+            config.taskBaseBranch()
+        }
+
         var stashed = false
         if (git.hasUncommittedChanges()) {
             if (!ui.confirmDirtyStart()) {
@@ -203,7 +220,6 @@ class WorkflowEngine(
             stashed = true
         }
 
-        val baseBranch = config.taskBaseBranch()
         val originalBranch = git.getCurrentBranch()
         syncBranch(baseBranch)
 

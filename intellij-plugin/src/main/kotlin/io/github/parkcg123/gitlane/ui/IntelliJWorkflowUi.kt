@@ -19,6 +19,7 @@ import io.github.parkcg123.gitlane.workflow.MergeTargetChoice
 import io.github.parkcg123.gitlane.workflow.MergeToDevelopChoice
 import io.github.parkcg123.gitlane.workflow.PendingConflictContext
 import io.github.parkcg123.gitlane.workflow.PendingConflictStateService
+import io.github.parkcg123.gitlane.workflow.StartBaseChoice
 import io.github.parkcg123.gitlane.workflow.WorkflowUi
 import java.nio.file.Path
 import java.util.concurrent.atomic.AtomicReference
@@ -47,6 +48,31 @@ class IntelliJWorkflowUi(
         }, ModalityState.any())
         errorRef.get()?.let { throw it }
         return resultRef.get()
+    }
+
+    override fun promptStartBaseBranch(
+        developBranch: String,
+        masterBranch: String,
+    ): StartBaseChoice {
+        return runOnEdtAndGet {
+            val choiceIndex = Messages.showDialog(
+                project,
+                "새 작업 브랜치를 어느 기준 브랜치에서 분기할까요?",
+                dialogTitle("① 작업 시작 기준 브랜치"),
+                arrayOf(
+                    "$developBranch (일반 작업 · 기본)",
+                    "$masterBranch (운영 핫픽스)",
+                    "취소",
+                ),
+                0,
+                Messages.getQuestionIcon(),
+            )
+            when (choiceIndex) {
+                0 -> StartBaseChoice.DEVELOP
+                1 -> StartBaseChoice.MASTER
+                else -> StartBaseChoice.CANCEL
+            }
+        }
     }
 
     override fun promptTaskName(datePrefix: String): String? {

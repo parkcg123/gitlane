@@ -6,6 +6,7 @@ import io.github.parkcg123.gitlane.workflow.ConflictPromptChoice
 import io.github.parkcg123.gitlane.workflow.MergeTargetChoice
 import io.github.parkcg123.gitlane.workflow.MergeToDevelopChoice
 import io.github.parkcg123.gitlane.workflow.PendingConflictContext
+import io.github.parkcg123.gitlane.workflow.StartBaseChoice
 import io.github.parkcg123.gitlane.workflow.WorkflowEngine
 import io.github.parkcg123.gitlane.workflow.WorkflowStatus
 import io.github.parkcg123.gitlane.workflow.WorkflowUi
@@ -22,6 +23,7 @@ import java.time.LocalDate
 
 class WorkflowEngineTest {
     private class ScriptedUi(
+        var startBaseChoice: StartBaseChoice = StartBaseChoice.DEVELOP,
         var taskName: String? = "login_fix",
         var dirtyStart: Boolean = false,
         var popStash: Boolean = false,
@@ -40,6 +42,12 @@ class WorkflowEngineTest {
         val warningMessages = mutableListOf<String>()
         val errorMessages = mutableListOf<String>()
         val openedConflictFiles = mutableListOf<List<String>>()
+        var startBasePromptCount: Int = 0
+
+        override fun promptStartBaseBranch(developBranch: String, masterBranch: String): StartBaseChoice {
+            startBasePromptCount += 1
+            return startBaseChoice
+        }
 
         override fun promptTaskName(datePrefix: String): String? = taskName
         override fun confirmDirtyStart(): Boolean = dirtyStart
@@ -728,5 +736,31 @@ class WorkflowEngineTest {
         assertTrue(ex.message.orEmpty().contains("푸시가 거절되었습니다"))
         assertTrue(ex.message.orEmpty().contains("Pull(동기화)"))
         assertTrue(git.branchExistsLocal("20261119_push_reject"))
+    }
+
+    @Test
+    fun `startTask can fork hotfix branch from master and skips prompt in direct mode`(@TempDir root: Path) {
+        val fixture = createFixture(root)
+        Files.writeString(fixture.peer.resolve("unreleased.txt"), "only develop\n")
+        runGit(fixture.peer, "add", "unreleased.txt")
+        runGit(fixture.peer, "commit", "-m", "feat: unreleased on develop")
+        runGit(fixture.peer, "push", "origin", "develop")
+
+        val git = GitRunner(fixture.work)
+        val ui = ScriptedUi(startBaseChoice = StartBaseChoice.MASTER, taskName = "hotfix_master")
+        val engine = WorkflowEngine(git, ui, FlowConfig()) { fixedDate }
+
+        val res = engine.startTask()
+        assertEquals(WorkflowStatus.SUCCESS, res.status)
+        assertEquals("20261119_hotfix_master", git.getCurrentBranch())
+        assertFalse(Files.exists(fixture.work.resolve("unreleased.txt")))
+
+        // Direct mode (useDevelopBranch = false) should not call promptStartBaseBranch
+        ui.startBasePromptCount = 0
+        ui.taskName = "direct_task"
+        val directEngine = WorkflowEngine(git, ui, FlowConfig(useDevelopBranch = false)) { fixedDate }
+        val directRes = directEngine.startTask()
+        assertEquals(WorkflowStatus.SUCCESS, directRes.status)
+        assertEquals(0, ui.startBasePromptCount)
     }
 }

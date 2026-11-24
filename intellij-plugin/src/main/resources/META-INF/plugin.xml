@@ -24,6 +24,7 @@
 
     <change-notes><![CDATA[
         <ul>
+            <li><b>0.6.0</b>: Added base-branch selection (<code>develop</code> default vs. <code>master</code> hotfix) when starting a task in 2-stage mode, and replaced deprecated <code>FileEditorManager.openFile(VirtualFile, boolean)</code> with <code>OpenFileDescriptor.navigate(true)</code>.</li>
             <li><b>0.5.1</b>: Fixed EDT threading violation when refreshing Git/IDE state after saving or initializing <code>.gitlane.json</code> from <code>InitConfigAction</code> or <b>Settings → Tools → GitLane</b>.</li>
             <li><b>0.5.0</b>: Added <code>.gitlane.json</code> auto-detect wizard, native <b>Settings → Tools → GitLane</b> UI, bulk cleanup of already-merged task branches, commit preview in <code>② Merge Task</code>, optional <code>stash pop</code> restore on task start, and friendly recovery guidance for <code>--ff-only</code> divergence and rejected pushes.</li>
             <li><b>0.4.0</b>: Added multi-repository discovery (multi-root, nested repos, submodules/worktrees), a unified status bar with conflict priority and full multi-repo tooltip, and a single-screen separator-grouped per-repository menu.</li>

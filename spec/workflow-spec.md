@@ -41,6 +41,12 @@
 
 ### ① 작업 시작 (`startTask`)
 
+* **기준 브랜치 선택 (`useDevelopBranch: true`일 때)**:
+  * `develop`과 `master`가 서로 다른 경우 실행 시 기준 브랜치를 선택합니다:
+    * **`develop (일반 작업 · 기본)`**: 스테이지 브랜치에서 일반 작업 분기
+    * **`master (운영 핫픽스)`**: 운영 브랜치에서 긴급 수정 분기
+    * **`취소`**
+  * `useDevelopBranch: false`인 경우에는 묻지 않고 바로 `master`를 기준으로 삼습니다.
 * **사전 검사 (Pre-flight)**:
   1. 진행 중인 머지(`MERGE_HEAD`) 또는 리베이스(`rebase-merge`/`rebase-apply`)가 있으면 중단하고 안내합니다.
   2. 미커밋 변경사항(dirty working tree)이 있으면 선택지를 제공합니다:

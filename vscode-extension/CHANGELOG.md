@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0] - 2026-11-24
+
+### Added
+- Base-branch selection in `① 작업 시작 (startTask)` when `useDevelopBranch: true`, allowing you to fork from `develop` (default) or `master` (production hotfix).
+
+### Changed
+- Aligned release version with GitLane IntelliJ Plugin 0.6.0 (replaced deprecated `FileEditorManager.openFile(VirtualFile, boolean)` with `OpenFileDescriptor.navigate(true)`).
+
 ## [0.5.1] - 2026-11-24
 
 ### Changed

@@ -22,7 +22,7 @@ VS Code 확장과 동일한 스펙(`../spec/workflow-spec.md`, `.gitlane.json`)�
 ```bash
 ./gradlew test          # 단위 테스트 및 임시 Git 저장소 통합 테스트
 ./gradlew runIde        # 테스트용 IntelliJ 샌드박스 IDE 실행
-./gradlew buildPlugin   # build/distributions/gitlane-intellij-0.5.0.zip 생성
+./gradlew buildPlugin   # build/distributions/gitlane-intellij-0.6.0.zip 생성
 ```
 
 ## 메뉴 및 UI 위치

@@ -51,8 +51,8 @@ gitlane/
   cd vscode-extension
   npm install
   npm run compile
-  npm run package   # gitlane-flow-0.5.0.vsix 생성
-  code --install-extension gitlane-flow-0.5.0.vsix
+  npm run package   # gitlane-flow-0.6.0.vsix 생성
+  code --install-extension gitlane-flow-0.6.0.vsix
   ```
   또는 VS Code **Extensions** → `...` → **Install from VSIX...** 에서 `.vsix` 파일을 선택합니다.
 
@@ -63,7 +63,7 @@ gitlane/
   * 요구 환경: **JDK 21**, **IntelliJ IDEA `2024.2+`** (`Git4Idea` 번들 플러그인 활성)
   ```bash
   cd intellij-plugin
-  ./gradlew buildPlugin  # build/distributions/gitlane-intellij-0.5.0.zip 생성
+  ./gradlew buildPlugin  # build/distributions/gitlane-intellij-0.6.0.zip 생성
   ```
   IntelliJ IDEA **Settings → Plugins → ⚙ → Install Plugin from Disk...** 에서 생성된 `.zip` 파일을 선택하고 IDE를 재시작합니다.
 

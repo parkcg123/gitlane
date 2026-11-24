@@ -3,6 +3,7 @@ import { GitClient } from './git';
 import { buildTaskBranchName, formatLocalDate, isProtectedBranch, validateTaskName } from './naming';
 
 export type MergeTargetChoice = 'develop' | 'master' | 'both' | 'cancel';
+export type StartBaseChoice = 'develop' | 'master' | 'cancel';
 
 export interface PendingConflictContext {
   targetBranch: string;
@@ -24,6 +25,7 @@ export interface WorkflowResult {
 }
 
 export interface WorkflowUI {
+  promptStartBaseBranch(developBranch: string, masterBranch: string): Promise<StartBaseChoice>;
   promptTaskName(datePrefix: string): Promise<string | undefined>;
   confirmDirtyStart(): Promise<'stash' | 'cancel'>;
   confirmPopStash(taskBranch: string): Promise<boolean>;
@@ -196,6 +198,18 @@ export class WorkflowService {
       return blocked;
     }
 
+    let baseBranch = getTaskBaseBranch(this.config);
+    if (this.config.useDevelopBranch && this.config.developBranch !== this.config.masterBranch) {
+      const baseChoice = await this.ui.promptStartBaseBranch(
+        this.config.developBranch,
+        this.config.masterBranch
+      );
+      if (baseChoice === 'cancel') {
+        return { status: 'cancelled', message: '작업 시작을 취소했습니다.' };
+      }
+      baseBranch = baseChoice === 'master' ? this.config.masterBranch : this.config.developBranch;
+    }
+
     let stashed = false;
     if (await this.git.hasUncommittedChanges()) {
       const dirtyChoice = await this.ui.confirmDirtyStart();
@@ -206,7 +220,6 @@ export class WorkflowService {
       stashed = true;
     }
 
-    const baseBranch = getTaskBaseBranch(this.config);
     const originalBranch = await this.git.getCurrentBranch();
     await this.syncBranch(baseBranch);
 

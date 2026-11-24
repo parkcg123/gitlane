@@ -17,6 +17,7 @@ import {
   detectRecommendedConfig,
   MergeTargetChoice,
   PendingConflictContext,
+  StartBaseChoice,
   WorkflowService,
   WorkflowUI,
 } from './workflow';
@@ -143,6 +144,38 @@ class VscodeWorkflowUI implements WorkflowUI {
 
   private get pendingStateKey(): string {
     return `${PENDING_CONFLICT_KEY_PREFIX}${this.repoRoot}`;
+  }
+
+  async promptStartBaseBranch(
+    developBranch: string,
+    masterBranch: string
+  ): Promise<StartBaseChoice> {
+    interface BaseQuickPickItem extends vscode.QuickPickItem {
+      choice: StartBaseChoice;
+    }
+    const items: BaseQuickPickItem[] = [
+      {
+        label: `$(git-branch) ${developBranch} (일반 작업 · 기본)`,
+        description: `${developBranch}에서 새 작업 브랜치 분기`,
+        choice: 'develop',
+      },
+      {
+        label: `$(flame) ${masterBranch} (운영 핫픽스)`,
+        description: `운영(${masterBranch})에서 긴급 수정 브랜치 분기`,
+        choice: 'master',
+      },
+      {
+        label: '$(close) 취소',
+        description: '현재 브랜치에 머무릅니다.',
+        choice: 'cancel',
+      },
+    ];
+    const picked = await vscode.window.showQuickPick(items, {
+      title: this.titleWithRepo('GitLane — ① 작업 시작 기준 브랜치'),
+      placeHolder: '새 작업 브랜치를 분기할 기준 브랜치를 선택하세요',
+      ignoreFocusOut: true,
+    });
+    return picked?.choice ?? 'cancel';
   }
 
   async promptTaskName(datePrefix: string): Promise<string | undefined> {
@@ -833,7 +866,13 @@ export function activate(context: vscode.ExtensionContext): void {
         const menuItems: RepoWorkflowMenuItem[] = [
           {
             label: '$(git-branch) ① 작업 시작 (브랜치 생성)',
-            description: `${config.useDevelopBranch ? config.developBranch : config.masterBranch} → YYYYMMDD${config.separator}작업명`,
+            description: `${
+              config.useDevelopBranch && config.developBranch !== config.masterBranch
+                ? `${config.developBranch} / ${config.masterBranch}`
+                : config.useDevelopBranch
+                  ? config.developBranch
+                  : config.masterBranch
+            } → YYYYMMDD${config.separator}작업명`,
             run: async () => {
               await service.startTask();
             },
@@ -1001,7 +1040,12 @@ export function activate(context: vscode.ExtensionContext): void {
       }
 
       const currentBranch = branch ?? 'HEAD 분리됨';
-      const baseBranch = config.useDevelopBranch ? config.developBranch : config.masterBranch;
+      const baseBranch =
+        config.useDevelopBranch && config.developBranch !== config.masterBranch
+          ? `${config.developBranch} / ${config.masterBranch}`
+          : config.useDevelopBranch
+            ? config.developBranch
+            : config.masterBranch;
       items.push({
         label: `$(git-branch) [${repo.label}] ① 작업 시작 (브랜치 생성)`,
         description: `${baseBranch} → YYYYMMDD${config.separator}작업명`,

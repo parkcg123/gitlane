@@ -4,7 +4,7 @@ import com.intellij.notification.NotificationType
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.fileEditor.FileEditorManager
+import com.intellij.openapi.fileEditor.OpenFileDescriptor
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.progress.Task
@@ -110,7 +110,7 @@ class InitConfigAction : DumbAwareAction() {
         private fun openConfigInEditor(project: Project, configPath: Path) {
             val vf = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(configPath) ?: return
             vf.refresh(true, false)
-            FileEditorManager.getInstance(project).openFile(vf, true)
+            OpenFileDescriptor(project, vf).navigate(true)
         }
     }
 }

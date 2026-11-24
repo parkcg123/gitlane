@@ -14,6 +14,7 @@ import { GitClient } from '../src/git';
 import {
   MergeTargetChoice,
   PendingConflictContext,
+  StartBaseChoice,
   WorkflowService,
   WorkflowUI,
 } from '../src/workflow';
@@ -77,6 +78,9 @@ class MockConflictUI implements WorkflowUI {
   taskName = 'task_conflict';
   mergeMode: 'delete' | 'keep' | 'cancel' = 'delete';
 
+  async promptStartBaseBranch(): Promise<StartBaseChoice> {
+    return 'develop';
+  }
   async promptTaskName(): Promise<string | undefined> {
     return this.taskName;
   }

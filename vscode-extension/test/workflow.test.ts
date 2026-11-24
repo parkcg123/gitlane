@@ -10,6 +10,7 @@ import {
   detectRecommendedConfig,
   MergeTargetChoice,
   PendingConflictContext,
+  StartBaseChoice,
   WorkflowService,
   WorkflowUI,
 } from '../src/workflow';
@@ -73,6 +74,7 @@ class MockWorkflowUI implements WorkflowUI {
   errors: string[] = [];
   openedFiles: string[] = [];
 
+  onPromptStartBaseBranch: () => StartBaseChoice = () => 'develop';
   onPromptTaskName: (datePrefix: string) => string | undefined = () => 'login_fix';
   onConfirmDirtyStart: () => 'stash' | 'cancel' = () => 'stash';
   onConfirmPopStash: () => boolean = () => false;
@@ -86,6 +88,10 @@ class MockWorkflowUI implements WorkflowUI {
   onConfirmReleaseToMaster: () => 'release' | 'cancel' = () => 'release';
   onConfirmAbortMerge: () => boolean = () => true;
   onPromptConflictAction: () => 'open' | 'abort' | 'later' = () => 'open';
+
+  async promptStartBaseBranch(): Promise<StartBaseChoice> {
+    return this.onPromptStartBaseBranch();
+  }
 
   async promptTaskName(datePrefix: string): Promise<string | undefined> {
     return this.onPromptTaskName(datePrefix);
@@ -754,5 +760,45 @@ describe('WorkflowService end-to-end git integration', () => {
     // Restore and verify task branch was NOT deleted
     git.push = originalPush;
     assert.equal(await git.branchExistsLocal('20261119_push_reject_case'), true);
+  });
+
+  it('startTask can fork hotfix branch from master when develop has unreleased commits and skips prompt in direct mode', async () => {
+    const fixture = createRepoFixture();
+    tempRoots.push(fixture.rootDir);
+
+    // Peer adds an unreleased commit to origin/develop (not in master)
+    fs.writeFileSync(path.join(fixture.peerDir, 'unreleased.txt'), 'only develop\n', 'utf8');
+    runGit(fixture.peerDir, ['add', 'unreleased.txt']);
+    runGit(fixture.peerDir, ['commit', '-m', 'feat: unreleased on develop']);
+    runGit(fixture.peerDir, ['push', 'origin', 'develop']);
+
+    const git = new GitClient(fixture.workDir);
+    const ui = new MockWorkflowUI();
+    const service = new WorkflowService(git, ui, DEFAULT_FLOW_CONFIG, FIXED_NOW);
+
+    ui.onPromptStartBaseBranch = () => 'master';
+    ui.onPromptTaskName = () => 'hotfix_from_master';
+
+    const hotfixRes = await service.startTask();
+    assert.equal(hotfixRes.status, 'success');
+    assert.equal(await git.getCurrentBranch(), '20261119_hotfix_from_master');
+    assert.equal(fs.existsSync(path.join(fixture.workDir, 'unreleased.txt')), false);
+
+    // Direct mode (useDevelopBranch: false) should not call promptStartBaseBranch
+    let promptCount = 0;
+    ui.onPromptStartBaseBranch = () => {
+      promptCount += 1;
+      return 'develop';
+    };
+    ui.onPromptTaskName = () => 'direct_task';
+    const directService = new WorkflowService(
+      git,
+      ui,
+      { ...DEFAULT_FLOW_CONFIG, useDevelopBranch: false },
+      FIXED_NOW
+    );
+    const directRes = await directService.startTask();
+    assert.equal(directRes.status, 'success');
+    assert.equal(promptCount, 0);
   });
 });
