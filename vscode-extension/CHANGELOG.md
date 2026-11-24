@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.1] - 2026-11-24
+
+### Changed
+- Aligned release version with GitLane IntelliJ Plugin 0.2.1 (contextual merge-conflict action visibility).
+
 ## [0.2.0] - 2026-11-19
 
 ### Added

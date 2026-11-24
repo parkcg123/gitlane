@@ -363,4 +363,62 @@ class WorkflowEngineTest {
             runGit(work, "rev-parse", "origin/master"),
         )
     }
+
+    @Test
+    fun `hasMergeHeadFile detects normal repo, conflict, abort, subdirectory, worktree, and non-git dir`(@TempDir root: Path) {
+        val nonGitDir = root.resolve("not-a-repo")
+        Files.createDirectories(nonGitDir)
+        assertFalse(GitRunner.hasMergeHeadFile(nonGitDir))
+
+        val fixture = createFixture(root)
+        val subDir = fixture.work.resolve("nested/dir")
+        Files.createDirectories(subDir)
+        assertFalse(GitRunner.hasMergeHeadFile(fixture.work))
+        assertFalse(GitRunner.hasMergeHeadFile(subDir))
+
+        val git = GitRunner(fixture.work)
+        val ui = ScriptedUi(taskName = "merge_head_check", conflictAction = ConflictPromptChoice.LATER)
+        val engine = WorkflowEngine(git, ui, FlowConfig()) { fixedDate }
+
+        engine.startTask()
+        Files.writeString(fixture.work.resolve("app.txt"), "from task\n")
+        runGit(fixture.work, "add", "app.txt")
+        runGit(fixture.work, "commit", "-m", "task change")
+
+        Files.writeString(fixture.peer.resolve("app.txt"), "from peer\n")
+        runGit(fixture.peer, "add", "app.txt")
+        runGit(fixture.peer, "commit", "-m", "peer change")
+        runGit(fixture.peer, "push", "origin", "develop")
+
+        val conflicted = engine.mergeToDevelop()
+        assertEquals(WorkflowStatus.CONFLICT, conflicted.status)
+        assertTrue(GitRunner.hasMergeHeadFile(fixture.work))
+        assertTrue(GitRunner.hasMergeHeadFile(subDir))
+
+        git.mergeAbort()
+        assertFalse(GitRunner.hasMergeHeadFile(fixture.work))
+        assertFalse(GitRunner.hasMergeHeadFile(subDir))
+
+        // Worktree (.git pointer file) conflict & abort detection
+        val worktreeDir = root.resolve("wt")
+        runGit(fixture.peer, "worktree", "add", "-b", "wt-conflict", worktreeDir.toString(), "HEAD")
+        assertTrue(Files.isRegularFile(worktreeDir.resolve(".git")))
+        assertFalse(GitRunner.hasMergeHeadFile(worktreeDir))
+
+        Files.writeString(worktreeDir.resolve("app.txt"), "from worktree\n")
+        runGit(worktreeDir, "add", "app.txt")
+        runGit(worktreeDir, "commit", "-m", "worktree change")
+
+        Files.writeString(fixture.peer.resolve("app.txt"), "from peer second\n")
+        runGit(fixture.peer, "add", "app.txt")
+        runGit(fixture.peer, "commit", "-m", "peer second change")
+
+        val wtGit = GitRunner(worktreeDir)
+        val wtOutcome = wtGit.merge("develop", noFastForward = true)
+        assertTrue(wtOutcome.conflicted)
+        assertTrue(GitRunner.hasMergeHeadFile(worktreeDir))
+
+        wtGit.mergeAbort()
+        assertFalse(GitRunner.hasMergeHeadFile(worktreeDir))
+    }
 }

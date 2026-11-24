@@ -202,4 +202,42 @@ class GitRunner(private val repoRoot: Path) {
             .filter { it.isNotEmpty() }
             .toList()
     }
+
+    companion object {
+        fun hasMergeHeadFile(startPath: Path): Boolean {
+            var current: Path? = startPath.toAbsolutePath().normalize()
+            var depth = 0
+            while (current != null && depth < 64) {
+                val dotGit = current.resolve(".git")
+                if (Files.isDirectory(dotGit)) {
+                    return Files.isRegularFile(dotGit.resolve("MERGE_HEAD"))
+                }
+                if (Files.isRegularFile(dotGit)) {
+                    val gitDir = resolveGitDirFromFile(current, dotGit)
+                    return gitDir != null && Files.isRegularFile(gitDir.resolve("MERGE_HEAD"))
+                }
+                current = current.parent
+                depth++
+            }
+            return false
+        }
+
+        private fun resolveGitDirFromFile(repoDir: Path, dotGitFile: Path): Path? {
+            return runCatching {
+                val firstLine = Files.readAllLines(dotGitFile, StandardCharsets.UTF_8)
+                    .firstOrNull { it.isNotBlank() }
+                    ?.trim()
+                    ?: return@runCatching null
+                if (!firstLine.startsWith("gitdir:", ignoreCase = true)) {
+                    return@runCatching null
+                }
+                val rawTarget = firstLine.substringAfter(":").trim()
+                if (rawTarget.isEmpty()) {
+                    return@runCatching null
+                }
+                val targetPath = Path.of(rawTarget)
+                if (targetPath.isAbsolute) targetPath.normalize() else repoDir.resolve(targetPath).normalize()
+            }.getOrNull()
+        }
+    }
 }

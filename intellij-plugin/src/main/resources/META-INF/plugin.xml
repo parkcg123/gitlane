@@ -22,6 +22,7 @@
 
     <change-notes><![CDATA[
         <ul>
+            <li><b>0.2.1</b>: Show conflict resolution actions (3-Way Merge, Complete Merge, Abort Merge) only while a merge conflict is in progress, keeping the GitLane menu clean during normal work.</li>
             <li><b>0.2.0</b>: Added <code>useDevelopBranch</code> option (<code>.gitlane.json</code>) to support branching from and merging directly into <code>master</code> without a <code>develop</code> branch.</li>
             <li><b>0.1.1</b>: Replaced deprecated <code>AbstractVcsHelper.showMergeDialog</code> with <code>GitConflictResolver</code> for full IntelliJ IDEA 2026.2+ compatibility.</li>
             <li><b>0.1.0</b>: Initial release of GitLane with Start Task, Merge to develop, Release to master, native 3-Way Merge conflict workflow, and real-time Status Bar widget.</li>

@@ -2,7 +2,7 @@
   "name": "gitlane-flow",
   "displayName": "GitLane Flow",
   "description": "팀 공용 초간단 Git 워크플로우 (develop → YYYYMMDD_작업명 → develop → master)",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "pck",
   "license": "MIT",
   "icon": "media/icon.png",

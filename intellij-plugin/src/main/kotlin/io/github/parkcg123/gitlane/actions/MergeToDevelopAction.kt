@@ -10,7 +10,7 @@ class MergeToDevelopAction : AnAction() {
 
     override fun update(e: AnActionEvent) {
         val project = e.project
-        if (project == null) {
+        if (project == null || IntelliJGitSupport.isMergeInProgressFast(project)) {
             e.presentation.isEnabledAndVisible = false
             return
         }

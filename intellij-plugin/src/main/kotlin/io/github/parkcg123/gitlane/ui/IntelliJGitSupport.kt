@@ -1,5 +1,6 @@
 package io.github.parkcg123.gitlane.ui
 
+import com.intellij.dvcs.repo.Repository
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.project.Project
@@ -12,6 +13,22 @@ import java.nio.file.Path
 
 object IntelliJGitSupport {
     const val NOTIFICATION_GROUP_ID = "GitLane"
+
+    fun isMergeInProgressFast(project: Project): Boolean {
+        if (project.isDisposed) {
+            return false
+        }
+        return runCatching {
+            val repo = GitRepositoryManager.getInstance(project).repositories.firstOrNull()
+            if (repo?.state == Repository.State.MERGING) {
+                return@runCatching true
+            }
+            val root = repo?.root?.toNioPath()
+                ?: project.basePath?.let { Path.of(it) }
+                ?: return@runCatching false
+            GitRunner.hasMergeHeadFile(root)
+        }.getOrDefault(false)
+    }
 
     fun resolveQuickConfig(project: Project): FlowConfig {
         if (project.isDisposed) {
