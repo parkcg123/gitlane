@@ -6,6 +6,7 @@ data class PendingConflictContext(
     val returnBranch: String,
     val deleteSourceOnComplete: Boolean,
     val kind: String,
+    val remainingTargets: List<String> = emptyList(),
 ) {
     companion object {
         const val KIND_MERGE_TO_DEVELOP = "mergeToDevelop"

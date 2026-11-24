@@ -11,7 +11,12 @@ import {
   getConflictSideLabels,
 } from '../src/conflictModel';
 import { GitClient } from '../src/git';
-import { PendingConflictContext, WorkflowService, WorkflowUI } from '../src/workflow';
+import {
+  MergeTargetChoice,
+  PendingConflictContext,
+  WorkflowService,
+  WorkflowUI,
+} from '../src/workflow';
 
 function runGit(cwd: string, args: string[]): string {
   return execFileSync('git', args, {
@@ -81,8 +86,17 @@ class MockConflictUI implements WorkflowUI {
   async confirmExistingBranch(): Promise<'checkout' | 'cancel'> {
     return 'checkout';
   }
+  async promptMergeTarget(): Promise<MergeTargetChoice> {
+    return 'develop';
+  }
   async confirmMergeToDevelop(): Promise<'delete' | 'keep' | 'cancel'> {
     return this.mergeMode;
+  }
+  async confirmDeleteAlreadyMergedBranch(): Promise<boolean> {
+    return false;
+  }
+  async confirmDeleteTaskBranch(): Promise<boolean> {
+    return true;
   }
   async confirmReleaseToMaster(): Promise<'release' | 'cancel'> {
     return 'release';

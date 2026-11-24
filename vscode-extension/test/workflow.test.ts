@@ -6,7 +6,12 @@ import * as path from 'node:path';
 import { afterEach, describe, it } from 'node:test';
 import { DEFAULT_FLOW_CONFIG, FlowConfig } from '../src/config';
 import { GitClient } from '../src/git';
-import { PendingConflictContext, WorkflowService, WorkflowUI } from '../src/workflow';
+import {
+  MergeTargetChoice,
+  PendingConflictContext,
+  WorkflowService,
+  WorkflowUI,
+} from '../src/workflow';
 
 function runGit(cwd: string, args: string[]): string {
   return execFileSync('git', args, {
@@ -70,7 +75,10 @@ class MockWorkflowUI implements WorkflowUI {
   onPromptTaskName: (datePrefix: string) => string | undefined = () => 'login_fix';
   onConfirmDirtyStart: () => 'stash' | 'cancel' = () => 'stash';
   onConfirmExistingBranch: () => 'checkout' | 'cancel' = () => 'checkout';
+  onPromptMergeTarget: () => MergeTargetChoice = () => 'develop';
   onConfirmMergeToDevelop: () => 'delete' | 'keep' | 'cancel' = () => 'delete';
+  onConfirmDeleteAlreadyMergedBranch: () => boolean = () => false;
+  onConfirmDeleteTaskBranch: () => boolean = () => true;
   onConfirmReleaseToMaster: () => 'release' | 'cancel' = () => 'release';
   onConfirmAbortMerge: () => boolean = () => true;
   onPromptConflictAction: () => 'open' | 'abort' | 'later' = () => 'open';
@@ -87,8 +95,20 @@ class MockWorkflowUI implements WorkflowUI {
     return this.onConfirmExistingBranch();
   }
 
+  async promptMergeTarget(): Promise<MergeTargetChoice> {
+    return this.onPromptMergeTarget();
+  }
+
   async confirmMergeToDevelop(): Promise<'delete' | 'keep' | 'cancel'> {
     return this.onConfirmMergeToDevelop();
+  }
+
+  async confirmDeleteAlreadyMergedBranch(): Promise<boolean> {
+    return this.onConfirmDeleteAlreadyMergedBranch();
+  }
+
+  async confirmDeleteTaskBranch(): Promise<boolean> {
+    return this.onConfirmDeleteTaskBranch();
   }
 
   async confirmReleaseToMaster(): Promise<'release' | 'cancel'> {
@@ -435,5 +455,163 @@ describe('WorkflowService end-to-end git integration', () => {
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });
     }
+  });
+
+  it('supports master-only and both (develop + master) merge targets including conflict continuation and already-merged cleanup', async () => {
+    const fixture = createRepoFixture();
+    tempRoots.push(fixture.rootDir);
+
+    const git = new GitClient(fixture.workDir);
+    const ui = new MockWorkflowUI();
+    const service = new WorkflowService(git, ui, DEFAULT_FLOW_CONFIG, FIXED_NOW);
+
+    // 1) Task -> master directly (even when develop mode is enabled), delete branch, return to develop
+    ui.onPromptTaskName = () => 'hotfix_master_only';
+    await service.startTask();
+    fs.writeFileSync(path.join(fixture.workDir, 'master_only.txt'), 'hotfix\n', 'utf8');
+    runGit(fixture.workDir, ['add', 'master_only.txt']);
+    runGit(fixture.workDir, ['commit', '-m', 'fix: master only']);
+
+    ui.onPromptMergeTarget = () => 'master';
+    ui.onConfirmMergeToDevelop = () => 'delete';
+    const masterOnly = await service.mergeToDevelop();
+    assert.equal(masterOnly.status, 'success');
+    assert.equal(await git.getCurrentBranch(), 'develop');
+    assert.equal(await git.branchExistsLocal('20261119_hotfix_master_only'), false);
+    // master received it while develop did NOT receive hotfix_master_only directly
+    runGit(fixture.peerDir, ['fetch', 'origin']);
+    assert.equal(
+      runGit(fixture.peerDir, ['rev-parse', 'origin/master']),
+      runGit(fixture.workDir, ['rev-parse', 'master'])
+    );
+
+    // 2) Task -> both (develop + master) cleanly, delete branch
+    ui.onPromptTaskName = () => 'sync_both_clean';
+    await service.startTask();
+    fs.writeFileSync(path.join(fixture.workDir, 'both.txt'), 'both\n', 'utf8');
+    runGit(fixture.workDir, ['add', 'both.txt']);
+    runGit(fixture.workDir, ['commit', '-m', 'feat: both branches']);
+
+    ui.onPromptMergeTarget = () => 'both';
+    ui.onConfirmMergeToDevelop = () => 'delete';
+    const bothClean = await service.mergeToDevelop();
+    assert.equal(bothClean.status, 'success');
+    assert.equal(await git.getCurrentBranch(), 'develop');
+    assert.equal(await git.branchExistsLocal('20261119_sync_both_clean'), false);
+    runGit(fixture.peerDir, ['fetch', 'origin']);
+    assert.equal(
+      runGit(fixture.workDir, ['rev-parse', 'develop']),
+      runGit(fixture.peerDir, ['rev-parse', 'origin/develop'])
+    );
+    assert.equal(
+      runGit(fixture.workDir, ['rev-parse', 'master']),
+      runGit(fixture.peerDir, ['rev-parse', 'origin/master'])
+    );
+
+    // 3) Task -> both where develop conflicts first, then continueAfterConflict finishes master + deletes branch
+    ui.onPromptTaskName = () => 'sync_both_conflict';
+    ui.onPromptConflictAction = () => 'later';
+    await service.startTask();
+    fs.writeFileSync(path.join(fixture.workDir, 'app.txt'), 'line1\nfrom_task_both\nline3\n', 'utf8');
+    runGit(fixture.workDir, ['add', 'app.txt']);
+    runGit(fixture.workDir, ['commit', '-m', 'fix: task both edit']);
+
+    runGit(fixture.peerDir, ['checkout', 'develop']);
+    runGit(fixture.peerDir, ['pull', '--ff-only', 'origin', 'develop']);
+    fs.writeFileSync(path.join(fixture.peerDir, 'app.txt'), 'line1\nfrom_peer_dev\nline3\n', 'utf8');
+    runGit(fixture.peerDir, ['add', 'app.txt']);
+    runGit(fixture.peerDir, ['commit', '-m', 'fix: peer dev edit']);
+    runGit(fixture.peerDir, ['push', 'origin', 'develop']);
+
+    const conflicted = await service.mergeToDevelop();
+    assert.equal(conflicted.status, 'conflict');
+    assert.equal(ui.pendingConflict?.targetBranch, 'develop');
+    assert.deepEqual(ui.pendingConflict?.remainingTargets, ['master']);
+
+    fs.writeFileSync(path.join(fixture.workDir, 'app.txt'), 'line1\nresolved_both\nline3\n', 'utf8');
+    runGit(fixture.workDir, ['add', 'app.txt']);
+
+    const resumed = await service.continueAfterConflict();
+    assert.equal(resumed.status, 'success');
+    assert.equal(await git.getCurrentBranch(), 'develop');
+    assert.equal(await git.branchExistsLocal('20261119_sync_both_conflict'), false);
+    assert.equal(ui.pendingConflict, undefined);
+    runGit(fixture.peerDir, ['fetch', 'origin']);
+    runGit(fixture.peerDir, ['checkout', 'master']);
+    runGit(fixture.peerDir, ['reset', '--hard', 'origin/master']);
+    assert.equal(
+      fs.readFileSync(path.join(fixture.peerDir, 'app.txt'), 'utf8'),
+      'line1\nfrom_task_both\nline3\n'
+    );
+
+    // 4) Task kept after merge -> next call offers already-merged branch cleanup
+    ui.onPromptTaskName = () => 'already_merged_cleanup';
+    await service.startTask();
+    fs.writeFileSync(path.join(fixture.workDir, 'cleanup.txt'), 'cleanup\n', 'utf8');
+    runGit(fixture.workDir, ['add', 'cleanup.txt']);
+    runGit(fixture.workDir, ['commit', '-m', 'feat: cleanup']);
+
+    ui.onPromptMergeTarget = () => 'develop';
+    ui.onConfirmMergeToDevelop = () => 'keep';
+    await service.mergeToDevelop();
+    assert.equal(await git.getCurrentBranch(), '20261119_already_merged_cleanup');
+
+    ui.onConfirmDeleteAlreadyMergedBranch = () => true;
+    const cleaned = await service.mergeToDevelop();
+    assert.equal(cleaned.status, 'success');
+    assert.equal(await git.getCurrentBranch(), 'develop');
+    assert.equal(await git.branchExistsLocal('20261119_already_merged_cleanup'), false);
+  });
+
+  it('deleteTaskBranch guards protected/dirty states and handles merged (-d) vs unmerged (-D) deletion', async () => {
+    const fixture = createRepoFixture();
+    tempRoots.push(fixture.rootDir);
+
+    const git = new GitClient(fixture.workDir);
+    const ui = new MockWorkflowUI();
+    const service = new WorkflowService(git, ui, DEFAULT_FLOW_CONFIG, FIXED_NOW);
+
+    // Guardrail 1: protected branch cannot be deleted
+    const blockedProtected = await service.deleteTaskBranch();
+    assert.equal(blockedProtected.status, 'blocked');
+
+    // Create task branch with uncommitted change -> blocked
+    ui.onPromptTaskName = () => 'delete_me';
+    await service.startTask();
+    fs.writeFileSync(path.join(fixture.workDir, 'dirty.txt'), 'dirty\n', 'utf8');
+    const blockedDirty = await service.deleteTaskBranch();
+    assert.equal(blockedDirty.status, 'blocked');
+
+    // Commit -> unmerged branch: cancel when declined, then force delete when confirmed
+    runGit(fixture.workDir, ['add', 'dirty.txt']);
+    runGit(fixture.workDir, ['commit', '-m', 'wip: unmerged']);
+
+    ui.onConfirmDeleteTaskBranch = () => false;
+    const cancelled = await service.deleteTaskBranch();
+    assert.equal(cancelled.status, 'cancelled');
+    assert.equal(await git.branchExistsLocal('20261119_delete_me'), true);
+
+    ui.onConfirmDeleteTaskBranch = () => true;
+    const deletedUnmerged = await service.deleteTaskBranch();
+    assert.equal(deletedUnmerged.status, 'success');
+    assert.equal(await git.getCurrentBranch(), 'develop');
+    assert.equal(await git.branchExistsLocal('20261119_delete_me'), false);
+
+    // Safe delete (-d) for branch already merged into develop
+    ui.onPromptTaskName = () => 'merged_safe_delete';
+    await service.startTask();
+    fs.writeFileSync(path.join(fixture.workDir, 'merged.txt'), 'merged\n', 'utf8');
+    runGit(fixture.workDir, ['add', 'merged.txt']);
+    runGit(fixture.workDir, ['commit', '-m', 'feat: merged']);
+
+    ui.onPromptMergeTarget = () => 'develop';
+    ui.onConfirmMergeToDevelop = () => 'keep';
+    await service.mergeToDevelop();
+    assert.equal(await git.getCurrentBranch(), '20261119_merged_safe_delete');
+
+    const deletedMerged = await service.deleteTaskBranch();
+    assert.equal(deletedMerged.status, 'success');
+    assert.equal(await git.getCurrentBranch(), 'develop');
+    assert.equal(await git.branchExistsLocal('20261119_merged_safe_delete'), false);
   });
 });

@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.0] - 2026-11-24
+
+### Added
+- Merge target selector for task branches (`develop`, `master`, or `develop + master` in parallel) with per-target conflict continuation and automatic branch cleanup.
+- Standalone `GitLane: 작업 브랜치 삭제` (`gitlane.deleteTaskBranch`) command with safe (`-d`) vs. unmerged-warning force (`-D`) deletion.
+- Branch-cleanup prompt when a task branch already has 0 ahead commits against the selected target(s).
+
+### Changed
+- Task-branch merge (`gitlane.mergeToDevelop`) and deletion (`gitlane.deleteTaskBranch`) actions are now hidden in both the GitLane menu and Command Palette unless checked out on a non-protected task branch.
+
 ## [0.2.1] - 2026-11-24
 
 ### Changed

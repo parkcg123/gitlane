@@ -2,7 +2,7 @@
   "name": "gitlane-flow",
   "displayName": "GitLane Flow",
   "description": "팀 공용 초간단 Git 워크플로우 (develop → YYYYMMDD_작업명 → develop → master)",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "publisher": "pck",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -57,8 +57,13 @@
       },
       {
         "command": "gitlane.mergeToDevelop",
-        "title": "GitLane: ② 스테이지 반영 (develop 병합)",
+        "title": "GitLane: ② 작업 반영 (병합 / 완료)",
         "icon": "$(git-merge)"
+      },
+      {
+        "command": "gitlane.deleteTaskBranch",
+        "title": "GitLane: 작업 브랜치 삭제",
+        "icon": "$(trash)"
       },
       {
         "command": "gitlane.releaseToMaster",
@@ -87,6 +92,36 @@
           "command": "gitlane.openMenu",
           "when": "scmProvider == git",
           "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "gitlane.startTask",
+          "when": "!gitlane.merging"
+        },
+        {
+          "command": "gitlane.mergeToDevelop",
+          "when": "gitlane.onTaskBranch && !gitlane.merging"
+        },
+        {
+          "command": "gitlane.deleteTaskBranch",
+          "when": "gitlane.onTaskBranch && !gitlane.merging"
+        },
+        {
+          "command": "gitlane.releaseToMaster",
+          "when": "gitlane.useDevelopBranch && !gitlane.merging"
+        },
+        {
+          "command": "gitlane.openConflictManager",
+          "when": "gitlane.merging"
+        },
+        {
+          "command": "gitlane.continueMerge",
+          "when": "gitlane.merging"
+        },
+        {
+          "command": "gitlane.abortMerge",
+          "when": "gitlane.merging"
         }
       ]
     },

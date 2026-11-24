@@ -4,9 +4,14 @@ import * as vscode from 'vscode';
 import { ConflictManagerPanel } from './conflictPanel';
 import { FlowConfig, loadRepoConfig } from './config';
 import { GitClient, GitError } from './git';
-import { sanitizeTaskName, validateTaskName } from './naming';
+import { isProtectedBranch, sanitizeTaskName, validateTaskName } from './naming';
 import { FlowStatusBar } from './statusBar';
-import { PendingConflictContext, WorkflowService, WorkflowUI } from './workflow';
+import {
+  MergeTargetChoice,
+  PendingConflictContext,
+  WorkflowService,
+  WorkflowUI,
+} from './workflow';
 
 const PENDING_CONFLICT_KEY_PREFIX = 'gitlane.pendingConflict:';
 
@@ -125,6 +130,50 @@ class VscodeWorkflowUI implements WorkflowUI {
     return picked === '기존 브랜치로 이동' ? 'checkout' : 'cancel';
   }
 
+  async promptMergeTarget(
+    taskBranch: string,
+    developBranch: string,
+    masterBranch: string
+  ): Promise<MergeTargetChoice> {
+    interface TargetQuickPickItem extends vscode.QuickPickItem {
+      target: MergeTargetChoice;
+    }
+
+    const items: TargetQuickPickItem[] = [
+      {
+        label: `$(git-merge) ${developBranch} (스테이지에만 반영)`,
+        description: `${taskBranch} → ${developBranch}`,
+        detail: '일반 작업 흐름: 스테이지(develop)에만 병합하고 푸시합니다.',
+        target: 'develop',
+      },
+      {
+        label: `$(rocket) ${masterBranch} (운영에만 반영)`,
+        description: `${taskBranch} → ${masterBranch}`,
+        detail: '스테이지를 거치지 않고 운영(master)에만 병합하고 푸시합니다.',
+        target: 'master',
+      },
+      {
+        label: `$(checklist) ${developBranch} + ${masterBranch} (둘 다 반영)`,
+        description: `${taskBranch} → ${developBranch} & ${masterBranch}`,
+        detail: '작업 브랜치를 develop과 master에 각각 병합하고 푸시합니다.',
+        target: 'both',
+      },
+      {
+        label: '$(close) 취소',
+        description: '현재 브랜치에 머무릅니다.',
+        target: 'cancel',
+      },
+    ];
+
+    const picked = await vscode.window.showQuickPick(items, {
+      title: `② 작업 반영 대상 선택 (${taskBranch})`,
+      placeHolder: '반영할 대상 브랜치를 선택하세요',
+      ignoreFocusOut: true,
+    });
+
+    return picked?.target ?? 'cancel';
+  }
+
   async confirmMergeToDevelop(
     taskBranch: string,
     developBranch: string,
@@ -134,21 +183,22 @@ class VscodeWorkflowUI implements WorkflowUI {
       action: 'delete' | 'keep' | 'cancel';
     }
 
+    const isMultiTarget = developBranch.includes(' + ');
     const items: MergeQuickPickItem[] = [
       {
         label: '$(trash) 병합 + 푸시 + 브랜치 삭제',
         description: `${taskBranch} → ${developBranch} (${commitCount}개 커밋)`,
-        detail: this.useDevelopBranch
-          ? '스테이지 반영 후 작업 브랜치를 정리합니다.'
-          : '운영 반영 후 작업 브랜치를 정리합니다.',
+        detail: isMultiTarget || !this.useDevelopBranch
+          ? '병합 및 푸시 완료 후 작업 브랜치를 정리합니다.'
+          : '반영 후 작업 브랜치를 정리합니다.',
         action: 'delete',
       },
       {
         label: '$(git-branch) 병합 + 푸시 (브랜치 유지)',
         description: `${taskBranch} → ${developBranch} (${commitCount}개 커밋)`,
-        detail: this.useDevelopBranch
-          ? '스테이지 확인 중 추가 수정이 필요하면 이 옵션을 선택하세요.'
-          : '추가 수정이 필요하면 이 옵션을 선택하세요.',
+        detail: isMultiTarget || !this.useDevelopBranch
+          ? '추가 수정이 필요하면 작업 브랜치를 유지합니다.'
+          : '확인 중 추가 수정이 필요하면 작업 브랜치를 유지합니다.',
         action: 'keep',
       },
       {
@@ -158,15 +208,52 @@ class VscodeWorkflowUI implements WorkflowUI {
       },
     ];
 
+    const title = this.useDevelopBranch
+      ? `② 작업 반영 (${taskBranch} → ${developBranch})`
+      : `② 운영 바로 반영 (${taskBranch} → ${developBranch})`;
     const picked = await vscode.window.showQuickPick(items, {
-      title: this.useDevelopBranch
-        ? `② 스테이지 반영 (${taskBranch} → ${developBranch})`
-        : `② 운영 바로 반영 (${taskBranch} → ${developBranch})`,
-      placeHolder: `반영 방식 선택 (${commitCount}개 커밋)`,
+      title,
+      placeHolder: `반영 방식 선택 (최대 ${commitCount}개 커밋)`,
       ignoreFocusOut: true,
     });
 
     return picked?.action ?? 'cancel';
+  }
+
+  async confirmDeleteAlreadyMergedBranch(
+    taskBranch: string,
+    targetSummary: string
+  ): Promise<boolean> {
+    const picked = await vscode.window.showInformationMessage(
+      `'${taskBranch}'는 이미 '${targetSummary}'에 반영되어 병합할 새 커밋이 없습니다. 작업 브랜치를 삭제할까요?`,
+      { modal: true },
+      '브랜치 삭제'
+    );
+    return picked === '브랜치 삭제';
+  }
+
+  async confirmDeleteTaskBranch(
+    taskBranch: string,
+    unmergedCommitCount: number,
+    returnBranch: string
+  ): Promise<boolean> {
+    const message =
+      unmergedCommitCount > 0
+        ? `'${taskBranch}'에 아직 병합되지 않은 커밋이 ${unmergedCommitCount}개 있습니다. 강제 삭제(-D)하고 '${returnBranch}'로 이동할까요?`
+        : `'${taskBranch}' 브랜치를 삭제하고 '${returnBranch}'로 이동할까요?`;
+    const confirmLabel = unmergedCommitCount > 0 ? '강제 삭제' : '브랜치 삭제';
+    const picked = await vscode.window.showWarningMessage(
+      message,
+      {
+        modal: true,
+        detail:
+          unmergedCommitCount > 0
+            ? '로컬 및 원격 작업 브랜치가 삭제되며, 병합되지 않은 커밋은 복구하기 어려울 수 있습니다.'
+            : '로컬 및 원격(존재 시) 작업 브랜치를 정리합니다.',
+      },
+      confirmLabel
+    );
+    return picked === confirmLabel;
   }
 
   async confirmReleaseToMaster(
@@ -478,47 +565,51 @@ export function activate(context: vscode.ExtensionContext): void {
             return;
           }
 
-          const currentBranch = (await git.getCurrentBranch()) ?? 'HEAD 분리됨';
-          const menuItems: Array<vscode.QuickPickItem & { run: () => Promise<void> }> = config.useDevelopBranch
-            ? [
-                {
-                  label: '$(git-branch) ① 작업 시작 (브랜치 생성)',
-                  description: `${config.developBranch} → YYYYMMDD${config.separator}작업명`,
-                  run: async () => {
-                    await service.startTask();
-                  },
+          const rawBranch = await git.getCurrentBranch();
+          const currentBranch = rawBranch ?? 'HEAD 분리됨';
+          const onTaskBranch = rawBranch !== null && !isProtectedBranch(rawBranch, config);
+          const menuItems: Array<vscode.QuickPickItem & { run: () => Promise<void> }> = [
+            {
+              label: '$(git-branch) ① 작업 시작 (브랜치 생성)',
+              description: `${config.useDevelopBranch ? config.developBranch : config.masterBranch} → YYYYMMDD${config.separator}작업명`,
+              run: async () => {
+                await service.startTask();
+              },
+            },
+          ];
+
+          if (onTaskBranch) {
+            menuItems.push(
+              {
+                label: config.useDevelopBranch
+                  ? '$(git-merge) ② 작업 반영 (병합 / 완료)'
+                  : `$(rocket) ② 운영 반영 (${config.masterBranch} 바로 병합)`,
+                description: config.useDevelopBranch
+                  ? `현재 작업(${currentBranch}) → ${config.developBranch} / ${config.masterBranch} 선택`
+                  : `현재 작업(${currentBranch}) → ${config.masterBranch}`,
+                run: async () => {
+                  await service.mergeToDevelop();
                 },
-                {
-                  label: '$(git-merge) ② 스테이지 반영 (develop 병합)',
-                  description: `현재 작업(${currentBranch}) → ${config.developBranch}`,
-                  run: async () => {
-                    await service.mergeToDevelop();
-                  },
+              },
+              {
+                label: '$(trash) 작업 브랜치 삭제',
+                description: `현재 작업(${currentBranch}) 삭제 후 복귀`,
+                run: async () => {
+                  await service.deleteTaskBranch();
                 },
-                {
-                  label: '$(rocket) ③ 운영 반영 (develop → master)',
-                  description: `${config.developBranch} → ${config.masterBranch}`,
-                  run: async () => {
-                    await service.releaseToMaster();
-                  },
-                },
-              ]
-            : [
-                {
-                  label: '$(git-branch) ① 작업 시작 (브랜치 생성)',
-                  description: `${config.masterBranch} → YYYYMMDD${config.separator}작업명`,
-                  run: async () => {
-                    await service.startTask();
-                  },
-                },
-                {
-                  label: `$(rocket) ② 운영 반영 (${config.masterBranch} 바로 병합)`,
-                  description: `현재 작업(${currentBranch}) → ${config.masterBranch}`,
-                  run: async () => {
-                    await service.mergeToDevelop();
-                  },
-                },
-              ];
+              }
+            );
+          }
+
+          if (config.useDevelopBranch) {
+            menuItems.push({
+              label: `$(rocket) ③ 운영 반영 (${config.developBranch} → ${config.masterBranch})`,
+              description: `${config.developBranch} → ${config.masterBranch}`,
+              run: async () => {
+                await service.releaseToMaster();
+              },
+            });
+          }
 
           const picked = await vscode.window.showQuickPick(menuItems, {
             title: `GitLane (현재: ${currentBranch})`,
@@ -555,6 +646,12 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand('gitlane.mergeToDevelop', () =>
       withWorkflowContext(context, statusBar, conflictPanel, async (service) => {
         await service.mergeToDevelop();
+      })
+    ),
+
+    vscode.commands.registerCommand('gitlane.deleteTaskBranch', () =>
+      withWorkflowContext(context, statusBar, conflictPanel, async (service) => {
+        await service.deleteTaskBranch();
       })
     ),
 

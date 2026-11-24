@@ -10,14 +10,18 @@ class MergeToDevelopAction : AnAction() {
 
     override fun update(e: AnActionEvent) {
         val project = e.project
-        if (project == null || IntelliJGitSupport.isMergeInProgressFast(project)) {
+        if (
+            project == null ||
+            IntelliJGitSupport.isMergeInProgressFast(project) ||
+            !IntelliJGitSupport.isOnTaskBranchFast(project)
+        ) {
             e.presentation.isEnabledAndVisible = false
             return
         }
         e.presentation.isEnabledAndVisible = true
         val cfg = IntelliJGitSupport.resolveQuickConfig(project)
         e.presentation.text = if (cfg.useDevelopBranch) {
-            "② 스테이지 반영 (${cfg.developBranch} 병합)"
+            "② 작업 반영 (병합 / 완료)"
         } else {
             "② 운영 반영 (${cfg.masterBranch} 바로 병합)"
         }
@@ -26,7 +30,7 @@ class MergeToDevelopAction : AnAction() {
     override fun actionPerformed(e: AnActionEvent) {
         val project = e.project ?: return
         val cfg = IntelliJGitSupport.resolveQuickConfig(project)
-        val taskTitle = if (cfg.useDevelopBranch) "GitLane: ② 스테이지 반영" else "GitLane: ② 운영 바로 반영"
+        val taskTitle = if (cfg.useDevelopBranch) "GitLane: ② 작업 반영" else "GitLane: ② 운영 바로 반영"
         WorkflowActionSupport.run(
             project,
             taskTitle,

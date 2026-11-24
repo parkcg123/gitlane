@@ -186,8 +186,8 @@ class GitRunner(private val repoRoot: Path) {
         runOrThrow("push", "-u", remote, branch)
     }
 
-    fun deleteLocalBranch(branch: String) {
-        runOrThrow("branch", "-d", branch)
+    fun deleteLocalBranch(branch: String, force: Boolean = false) {
+        runOrThrow("branch", if (force) "-D" else "-d", branch)
     }
 
     fun deleteRemoteBranch(remote: String, branch: String) {
@@ -205,21 +205,42 @@ class GitRunner(private val repoRoot: Path) {
 
     companion object {
         fun hasMergeHeadFile(startPath: Path): Boolean {
+            val gitDir = resolveGitDir(startPath) ?: return false
+            return Files.isRegularFile(gitDir.resolve("MERGE_HEAD"))
+        }
+
+        fun getCurrentBranchFast(startPath: Path): String? {
+            val gitDir = resolveGitDir(startPath) ?: return null
+            val headFile = gitDir.resolve("HEAD")
+            if (!Files.isRegularFile(headFile)) {
+                return null
+            }
+            return runCatching {
+                val content = Files.readString(headFile, StandardCharsets.UTF_8).trim()
+                val prefix = "ref: refs/heads/"
+                if (content.startsWith(prefix)) {
+                    content.removePrefix(prefix).trim().takeIf { it.isNotEmpty() }
+                } else {
+                    null
+                }
+            }.getOrNull()
+        }
+
+        private fun resolveGitDir(startPath: Path): Path? {
             var current: Path? = startPath.toAbsolutePath().normalize()
             var depth = 0
             while (current != null && depth < 64) {
                 val dotGit = current.resolve(".git")
                 if (Files.isDirectory(dotGit)) {
-                    return Files.isRegularFile(dotGit.resolve("MERGE_HEAD"))
+                    return dotGit
                 }
                 if (Files.isRegularFile(dotGit)) {
-                    val gitDir = resolveGitDirFromFile(current, dotGit)
-                    return gitDir != null && Files.isRegularFile(gitDir.resolve("MERGE_HEAD"))
+                    return resolveGitDirFromFile(current, dotGit)
                 }
                 current = current.parent
                 depth++
             }
-            return false
+            return null
         }
 
         private fun resolveGitDirFromFile(repoDir: Path, dotGitFile: Path): Path? {

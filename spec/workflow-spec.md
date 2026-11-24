@@ -56,14 +56,33 @@
      * `"취소"` 선택 시 종료.
   6. `git checkout -b <taskBranch>` 실행.
 
-### ② 스테이지/운영 바로 반영 (`mergeToDevelop`)
+### ② 작업 반영 (`mergeToDevelop`)
 
-* `useDevelopBranch`가 `true`이면 대상 브랜치는 `develop`(충돌 컨텍스트 `kind: "mergeToDevelop"`), `false`이면 대상 브랜치는 `master`(충돌 컨텍스트 `kind: "mergeToMaster"`)입니다.
+* **메뉴 표시 조건**: 현재 브랜치가 작업 브랜치(보호 브랜치가 아니고 Detached HEAD가 아님)이며 머지 충돌 중이 아닐 때만 메뉴에 표시됩니다. 보호 브랜치(`develop` / `master`)에서는 숨김 처리되고 직접 호출 시 차단됩니다.
+* **대상 선택**:
+  * `useDevelopBranch`가 `true`이면 사용자에게 **`develop`만**, **`master`만**, **`develop + master` 둘 다** 중 반영 대상을 선택받습니다.
+  * `useDevelopBranch`가 `false`이면 대상은 항상 `master`입니다.
 * **사전 검사 (Pre-flight)**:
   1. 진행 중인 머지/리베이스가 있으면 중단합니다.
   2. Detached HEAD 상태이거나 현재 브랜치가 보호 브랜치(`useDevelopBranch: true`일 때 `develop` 또는 `master`, `false`일 때 `master`)이면 차단합니다.
   3. 미커밋 변경사항이 있으면 커밋 또는 Stash를 먼저 하도록 안내하고 차단합니다.
-  4. 대상 브랜치를 최신화한 뒤 `<targetBranch>..<taskBranch>` 커밋이 없으면 `"<targetBranch>에 병합할 새 커밋이 없습니다."` 안내 후 종료합니다.
+  4. 선택한 모든 대상 브랜치를 최신화한 뒤 `<target>..<taskBranch>` 커밋이 모두 0건이면 `"이미 반영되어 있습니다. 작업 브랜치를 삭제할까요?"`를 물어보고, 승인 시 작업 브랜치를 삭제(`-d` + 원격 삭제)합니다.
+* **순차 병합 및 충돌 이어하기 (`develop + master` 선택 시)**:
+  * `develop`에 있던 다른 미배포 커밋이 `master`로 섞이지 않도록, **작업 브랜치 → `develop`**, **작업 브랜치 → `master`** 순으로 각각 병합·푸시합니다.
+  * 첫 번째 대상(`develop`)에서 충돌이 발생하면 `PendingConflictContext.remainingTargets`에 남은 대상(`["master"]`)을 저장하고, 충돌 해결 완료(`continueMerge`) 직후 남은 대상 병합을 자동으로 이어서 진행합니다.
+  * `브랜치 삭제` 선택 시 마지막 대상 병합이 끝난 상태에서 로컬(`-d`) 및 원격 작업 브랜치를 삭제한 뒤(`returnToDevelopAfterRelease`가 `true`이면 `develop`으로 복귀) 마무리합니다.
+
+### 작업 브랜치 삭제 (`deleteTaskBranch`)
+
+* **메뉴 표시 조건**: 작업 브랜치이며 머지 충돌 중이 아닐 때만 메뉴에 표시됩니다.
+* **사전 검사 (Pre-flight)**:
+  1. 진행 중인 머지/리베이스가 있으면 중단합니다.
+  2. Detached HEAD 상태이거나 보호 브랜치이면 차단합니다.
+  3. 미커밋 변경사항이 있으면 차단합니다.
+* **실행 절차**:
+  1. 로컬 `develop` 또는 `master`에 이미 모두 반영되었는지 확인합니다.
+  2. 이미 반영된 브랜치면 안전 삭제(`git branch -d`), 미병합 커밋이 남아 있으면 커밋 수를 경고한 뒤 사용자 승인 시 강제 삭제(`git branch -D`)를 수행합니다.
+  3. 원격 작업 브랜치가 존재하면 best-effort로 함께 삭제하고 기준 브랜치(`develop` 또는 `master`)로 복귀합니다.
 
 ### ③ 운영 반영 (`releaseToMaster`)
 

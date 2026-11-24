@@ -12,6 +12,7 @@ import git4idea.merge.GitConflictResolver
 import git4idea.repo.GitRepositoryManager
 import io.github.parkcg123.gitlane.naming.BranchNamer
 import io.github.parkcg123.gitlane.workflow.ConflictPromptChoice
+import io.github.parkcg123.gitlane.workflow.MergeTargetChoice
 import io.github.parkcg123.gitlane.workflow.MergeToDevelopChoice
 import io.github.parkcg123.gitlane.workflow.PendingConflictContext
 import io.github.parkcg123.gitlane.workflow.PendingConflictStateService
@@ -96,20 +97,49 @@ class IntelliJWorkflowUi(
         }
     }
 
+    override fun promptMergeTarget(
+        taskBranch: String,
+        developBranch: String,
+        masterBranch: String,
+    ): MergeTargetChoice {
+        return runOnEdtAndGet {
+            val choiceIndex = Messages.showDialog(
+                project,
+                "'$taskBranch' 작업 브랜치를 어느 브랜치에 반영할까요?",
+                "GitLane — ② 작업 반영 대상 선택",
+                arrayOf(
+                    "$developBranch (스테이지만)",
+                    "$masterBranch (운영만)",
+                    "$developBranch + $masterBranch (둘 다)",
+                    "취소",
+                ),
+                0,
+                Messages.getQuestionIcon(),
+            )
+            when (choiceIndex) {
+                0 -> MergeTargetChoice.DEVELOP
+                1 -> MergeTargetChoice.MASTER
+                2 -> MergeTargetChoice.BOTH
+                else -> MergeTargetChoice.CANCEL
+            }
+        }
+    }
+
     override fun confirmMergeToDevelop(
         taskBranch: String,
         developBranch: String,
         commitCount: Int,
     ): MergeToDevelopChoice {
         val title = if (useDevelopBranch) {
-            "GitLane — ② 스테이지 반영 ($taskBranch → $developBranch)"
+            "GitLane — ② 작업 반영 ($taskBranch → $developBranch)"
         } else {
             "GitLane — ② 운영 바로 반영 ($taskBranch → $developBranch)"
         }
+        val commitDesc = if (developBranch.contains(" + ")) "최대 ${commitCount}개" else "${commitCount}개"
         return runOnEdtAndGet {
             val choiceIndex = Messages.showDialog(
                 project,
-                "'$taskBranch'의 ${commitCount}개 커밋을 '$developBranch'에 어떻게 반영할까요?",
+                "'$taskBranch'의 ${commitDesc} 커밋을 '$developBranch'에 어떻게 반영할까요?",
                 title,
                 arrayOf("병합 + 푸시 + 브랜치 삭제", "병합 + 푸시 (브랜치 유지)", "취소"),
                 0,
@@ -120,6 +150,48 @@ class IntelliJWorkflowUi(
                 1 -> MergeToDevelopChoice.KEEP
                 else -> MergeToDevelopChoice.CANCEL
             }
+        }
+    }
+
+    override fun confirmDeleteAlreadyMergedBranch(
+        taskBranch: String,
+        targetSummary: String,
+    ): Boolean {
+        return runOnEdtAndGet {
+            val answer = Messages.showYesNoDialog(
+                project,
+                "'$taskBranch'는 이미 '$targetSummary'에 반영되어 병합할 새 커밋이 없습니다. 작업 브랜치를 삭제할까요?",
+                "GitLane — 작업 브랜치 정리",
+                "브랜치 삭제",
+                "유지",
+                Messages.getQuestionIcon(),
+            )
+            answer == Messages.YES
+        }
+    }
+
+    override fun confirmDeleteTaskBranch(
+        taskBranch: String,
+        unmergedCommitCount: Int,
+        returnBranch: String,
+    ): Boolean {
+        val message = if (unmergedCommitCount > 0) {
+            "'$taskBranch'에 아직 병합되지 않은 커밋이 ${unmergedCommitCount}개 있습니다.\n강제 삭제(-D)하고 '$returnBranch'로 이동할까요? (복구 어려움)"
+        } else {
+            "'$taskBranch' 브랜치를 삭제하고 '$returnBranch'로 이동할까요?"
+        }
+        val confirmText = if (unmergedCommitCount > 0) "강제 삭제" else "브랜치 삭제"
+        val icon = if (unmergedCommitCount > 0) Messages.getWarningIcon() else Messages.getQuestionIcon()
+        return runOnEdtAndGet {
+            val answer = Messages.showYesNoDialog(
+                project,
+                message,
+                "GitLane — 작업 브랜치 삭제",
+                confirmText,
+                "취소",
+                icon,
+            )
+            answer == Messages.YES
         }
     }
 

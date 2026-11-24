@@ -13,6 +13,13 @@ enum class WorkflowStatus {
     NOOP,
 }
 
+enum class MergeTargetChoice {
+    DEVELOP,
+    MASTER,
+    BOTH,
+    CANCEL,
+}
+
 enum class MergeToDevelopChoice {
     DELETE,
     KEEP,
@@ -36,7 +43,10 @@ interface WorkflowUi {
     fun promptTaskName(datePrefix: String): String?
     fun confirmDirtyStart(): Boolean
     fun confirmExistingBranch(branchName: String): Boolean
+    fun promptMergeTarget(taskBranch: String, developBranch: String, masterBranch: String): MergeTargetChoice
     fun confirmMergeToDevelop(taskBranch: String, developBranch: String, commitCount: Int): MergeToDevelopChoice
+    fun confirmDeleteAlreadyMergedBranch(taskBranch: String, targetSummary: String): Boolean
+    fun confirmDeleteTaskBranch(taskBranch: String, unmergedCommitCount: Int, returnBranch: String): Boolean
     fun confirmReleaseToMaster(developBranch: String, masterBranch: String, aheadCommits: List<String>): Boolean
     fun confirmAbortMerge(targetBranch: String): Boolean
     fun promptConflictAction(context: PendingConflictContext, conflictedFiles: List<String>): ConflictPromptChoice
@@ -94,8 +104,8 @@ class WorkflowEngine(
         return false
     }
 
-    private fun cleanupTaskBranch(taskBranch: String) {
-        git.deleteLocalBranch(taskBranch)
+    private fun cleanupTaskBranch(taskBranch: String, force: Boolean = false) {
+        git.deleteLocalBranch(taskBranch, force)
         if (git.hasRemote(config.remote) && git.branchExistsRemote(config.remote, taskBranch)) {
             try {
                 git.deleteRemoteBranch(config.remote, taskBranch)
@@ -204,14 +214,112 @@ class WorkflowEngine(
         return WorkflowResult(WorkflowStatus.SUCCESS, msg, branch = taskBranch)
     }
 
+    private fun resolveSelectedTargets(choice: MergeTargetChoice): List<String> {
+        return when (choice) {
+            MergeTargetChoice.DEVELOP -> listOf(config.developBranch)
+            MergeTargetChoice.MASTER -> listOf(config.masterBranch)
+            MergeTargetChoice.BOTH -> if (config.developBranch == config.masterBranch) {
+                listOf(config.masterBranch)
+            } else {
+                listOf(config.developBranch, config.masterBranch)
+            }
+            MergeTargetChoice.CANCEL -> emptyList()
+        }
+    }
+
+    private fun executeTaskMergeTargets(
+        taskBranch: String,
+        targets: List<String>,
+        deleteSourceOnComplete: Boolean,
+        alreadySynced: Boolean,
+        completedTargets: List<String> = emptyList(),
+        anyPushedSoFar: Boolean = false,
+    ): WorkflowResult {
+        val doneTargets = completedTargets.toMutableList()
+        var anyPushed = anyPushedSoFar
+
+        for (i in targets.indices) {
+            val target = targets[i]
+            val remaining = targets.drop(i + 1)
+
+            if (!alreadySynced) {
+                syncBranch(target)
+                val remainingAhead = git.getAheadCommits(target, taskBranch)
+                if (remainingAhead.isEmpty()) {
+                    doneTargets.add(target)
+                    continue
+                }
+            } else if (git.getCurrentBranch() != target) {
+                git.checkout(target)
+            }
+
+            val mergeResult = git.merge(taskBranch, config.useNoFastForwardMerge)
+            if (mergeResult.conflicted) {
+                val conflictKind = if (target == config.masterBranch) {
+                    PendingConflictContext.KIND_MERGE_TO_MASTER
+                } else {
+                    PendingConflictContext.KIND_MERGE_TO_DEVELOP
+                }
+                return handleMergeConflict(
+                    PendingConflictContext(
+                        targetBranch = target,
+                        sourceBranch = taskBranch,
+                        returnBranch = taskBranch,
+                        deleteSourceOnComplete = deleteSourceOnComplete,
+                        kind = conflictKind,
+                        remainingTargets = remaining,
+                    ),
+                    mergeResult.conflictedFiles,
+                )
+            }
+
+            val pushed = pushIfRemoteExists(target)
+            anyPushed = anyPushed || pushed
+            doneTargets.add(target)
+        }
+
+        var finalBranch = targets.last()
+        if (deleteSourceOnComplete) {
+            // Delete while HEAD is still on the merged target so `git branch -d` succeeds even for master-only merges.
+            cleanupTaskBranch(taskBranch, force = false)
+            if (
+                config.useDevelopBranch &&
+                config.returnToDevelopAfterRelease &&
+                finalBranch == config.masterBranch &&
+                git.branchExistsLocal(config.developBranch)
+            ) {
+                git.checkout(config.developBranch)
+                finalBranch = config.developBranch
+            }
+        } else {
+            git.checkout(taskBranch)
+            finalBranch = taskBranch
+        }
+
+        ui.setPendingConflict(null)
+        val targetsLabel = doneTargets.joinToString(" + ")
+        val pushSuffix = if (anyPushed) " 및 푸시" else " (로컬 전용)"
+        val branchSuffix = if (deleteSourceOnComplete) {
+            ", '$taskBranch' 삭제"
+        } else {
+            ", '$taskBranch' 유지"
+        }
+        val msg = "'$taskBranch' → '$targetsLabel' 병합${pushSuffix} 완료$branchSuffix"
+        ui.showInfo(msg)
+        return WorkflowResult(
+            status = WorkflowStatus.SUCCESS,
+            message = msg,
+            branch = finalBranch,
+        )
+    }
+
     /**
-     * Action 2: Merge current task branch into target base branch (`develop`, or `master` when `useDevelopBranch` is false) and push.
+     * Action 2: Merge current task branch into selected target branch(es) (`develop`, `master`, or both) and optionally delete it.
      */
     fun mergeToDevelop(): WorkflowResult {
         checkInProgressState()?.let { return it }
 
-        val targetBranch = config.taskBaseBranch()
-        val actionLabel = if (config.useDevelopBranch) "스테이지 반영" else "운영 반영"
+        val actionLabel = if (config.useDevelopBranch) "작업 반영" else "운영 반영"
 
         val taskBranch = git.getCurrentBranch()
         if (taskBranch == null) {
@@ -232,63 +340,131 @@ class WorkflowEngine(
             return WorkflowResult(WorkflowStatus.BLOCKED, msg)
         }
 
-        syncBranch(targetBranch)
-        val aheadCommits = git.getAheadCommits(targetBranch, taskBranch)
+        val selectedTargets = if (config.useDevelopBranch) {
+            val targetChoice = ui.promptMergeTarget(taskBranch, config.developBranch, config.masterBranch)
+            if (targetChoice == MergeTargetChoice.CANCEL) {
+                return WorkflowResult(WorkflowStatus.CANCELLED, "${actionLabel}을 취소했습니다.", branch = taskBranch)
+            }
+            resolveSelectedTargets(targetChoice)
+        } else {
+            listOf(config.masterBranch)
+        }
 
-        if (aheadCommits.isEmpty()) {
+        val targetCounts = selectedTargets.map { target ->
+            syncBranch(target)
+            target to git.getAheadCommits(target, taskBranch).size
+        }
+
+        val effectiveTargets = targetCounts.filter { it.second > 0 }
+        if (effectiveTargets.isEmpty()) {
+            val targetSummary = selectedTargets.joinToString(" + ")
+            if (ui.confirmDeleteAlreadyMergedBranch(taskBranch, targetSummary)) {
+                val landingBranch = if (config.useDevelopBranch && selectedTargets.contains(config.developBranch)) {
+                    config.developBranch
+                } else {
+                    selectedTargets.first()
+                }
+                if (git.getCurrentBranch() != landingBranch) {
+                    git.checkout(landingBranch)
+                }
+                cleanupTaskBranch(taskBranch, force = false)
+                val msg = "'$taskBranch'는 이미 '$targetSummary'에 반영되어 있어 브랜치를 삭제했습니다."
+                ui.showInfo(msg)
+                return WorkflowResult(WorkflowStatus.SUCCESS, msg, branch = landingBranch)
+            }
+
             git.checkout(taskBranch)
-            val msg = "${targetBranch}에 병합할 새 커밋이 없습니다."
+            val msg = "${targetSummary}에 병합할 새 커밋이 없습니다."
             ui.showInfo(msg)
             return WorkflowResult(WorkflowStatus.NOOP, msg, branch = taskBranch)
         }
 
-        val choice = ui.confirmMergeToDevelop(taskBranch, targetBranch, aheadCommits.size)
+        val effectiveBranches = effectiveTargets.map { it.first }
+        val maxCommitCount = effectiveTargets.maxOf { it.second }
+        val choice = ui.confirmMergeToDevelop(taskBranch, effectiveBranches.joinToString(" + "), maxCommitCount)
         if (choice == MergeToDevelopChoice.CANCEL) {
             git.checkout(taskBranch)
             return WorkflowResult(WorkflowStatus.CANCELLED, "${actionLabel}을 취소했습니다.", branch = taskBranch)
         }
 
-        val mergeResult = git.merge(taskBranch, config.useNoFastForwardMerge)
-        if (mergeResult.conflicted) {
-            val conflictKind = if (config.useDevelopBranch) {
-                PendingConflictContext.KIND_MERGE_TO_DEVELOP
-            } else {
-                PendingConflictContext.KIND_MERGE_TO_MASTER
-            }
-            return handleMergeConflict(
-                PendingConflictContext(
-                    targetBranch = targetBranch,
-                    sourceBranch = taskBranch,
-                    returnBranch = taskBranch,
-                    deleteSourceOnComplete = choice == MergeToDevelopChoice.DELETE,
-                    kind = conflictKind,
-                ),
-                mergeResult.conflictedFiles,
-            )
-        }
-
-        val pushed = pushIfRemoteExists(targetBranch)
-
-        if (choice == MergeToDevelopChoice.DELETE) {
-            cleanupTaskBranch(taskBranch)
-        } else {
-            git.checkout(taskBranch)
-        }
-
-        ui.setPendingConflict(null)
-        val pushSuffix = if (pushed) " 및 푸시" else " (로컬 전용)"
-        val branchSuffix = if (choice == MergeToDevelopChoice.DELETE) {
-            ", '$taskBranch' 삭제"
-        } else {
-            ", '$taskBranch' 유지"
-        }
-        val msg = "'$taskBranch' → '${targetBranch}' 병합${pushSuffix} 완료$branchSuffix"
-        ui.showInfo(msg)
-        return WorkflowResult(
-            status = WorkflowStatus.SUCCESS,
-            message = msg,
-            branch = if (choice == MergeToDevelopChoice.DELETE) targetBranch else taskBranch,
+        return executeTaskMergeTargets(
+            taskBranch = taskBranch,
+            targets = effectiveBranches,
+            deleteSourceOnComplete = choice == MergeToDevelopChoice.DELETE,
+            alreadySynced = true,
         )
+    }
+
+    /**
+     * Standalone Action: Delete current non-protected task branch (safe `-d` if merged, warning + `-D` if unmerged).
+     */
+    fun deleteTaskBranch(): WorkflowResult {
+        checkInProgressState()?.let { return it }
+
+        val taskBranch = git.getCurrentBranch()
+        if (taskBranch == null) {
+            val msg = "Detached HEAD 상태에서는 브랜치 삭제를 진행할 수 없습니다."
+            ui.showWarning(msg)
+            return WorkflowResult(WorkflowStatus.BLOCKED, msg)
+        }
+
+        if (BranchNamer.isProtectedBranch(taskBranch, config)) {
+            val msg = "보호 브랜치('$taskBranch')는 삭제할 수 없습니다."
+            ui.showWarning(msg)
+            return WorkflowResult(WorkflowStatus.BLOCKED, msg)
+        }
+
+        if (git.hasUncommittedChanges()) {
+            val msg = "커밋되지 않은 변경사항이 있습니다. 먼저 커밋하거나 Stash한 뒤 다시 시도해 주세요."
+            ui.showWarning(msg)
+            return WorkflowResult(WorkflowStatus.BLOCKED, msg)
+        }
+
+        val candidateBases = if (config.useDevelopBranch) {
+            listOf(config.developBranch, config.masterBranch)
+        } else {
+            listOf(config.masterBranch)
+        }
+
+        val mergedTarget = candidateBases.firstOrNull { candidate ->
+            git.branchExistsLocal(candidate) && git.getAheadCommits(candidate, taskBranch).isEmpty()
+        }
+
+        val preferredBase = config.taskBaseBranch()
+        val returnBranch = when {
+            git.branchExistsLocal(preferredBase) -> preferredBase
+            else -> candidateBases.firstOrNull { git.branchExistsLocal(it) }
+                ?: if (git.ensureLocalBranch(preferredBase, config.remote)) {
+                    preferredBase
+                } else {
+                    throw IllegalStateException("복귀할 기준 브랜치('$preferredBase')를 찾을 수 없습니다.")
+                }
+        }
+
+        val unmergedCommitCount = if (mergedTarget != null) {
+            0
+        } else {
+            git.getAheadCommits(returnBranch, taskBranch).size
+        }
+
+        if (!ui.confirmDeleteTaskBranch(taskBranch, unmergedCommitCount, returnBranch)) {
+            return WorkflowResult(WorkflowStatus.CANCELLED, "브랜치 삭제를 취소했습니다.", branch = taskBranch)
+        }
+
+        if (mergedTarget != null) {
+            git.checkout(mergedTarget)
+            cleanupTaskBranch(taskBranch, force = false)
+            if (returnBranch != mergedTarget) {
+                git.checkout(returnBranch)
+            }
+        } else {
+            git.checkout(returnBranch)
+            cleanupTaskBranch(taskBranch, force = true)
+        }
+
+        val msg = "'$taskBranch' 브랜치를 삭제하고 '$returnBranch'로 이동했습니다."
+        ui.showInfo(msg)
+        return WorkflowResult(WorkflowStatus.SUCCESS, msg, branch = returnBranch)
     }
 
     /**
@@ -425,13 +601,40 @@ class WorkflowEngine(
         git.commitMerge()
         val pushed = targetBranch?.let { pushIfRemoteExists(it) } ?: false
 
+        if (
+            (
+                ctx?.kind == PendingConflictContext.KIND_MERGE_TO_DEVELOP ||
+                    ctx?.kind == PendingConflictContext.KIND_MERGE_TO_MASTER
+            ) &&
+            ctx.remainingTargets.isNotEmpty()
+        ) {
+            ui.setPendingConflict(null)
+            return executeTaskMergeTargets(
+                taskBranch = ctx.sourceBranch,
+                targets = ctx.remainingTargets,
+                deleteSourceOnComplete = ctx.deleteSourceOnComplete,
+                alreadySynced = false,
+                completedTargets = listOfNotNull(targetBranch),
+                anyPushedSoFar = pushed,
+            )
+        }
+
         var finalBranch = targetBranch
         if (
             ctx?.kind == PendingConflictContext.KIND_MERGE_TO_DEVELOP ||
             ctx?.kind == PendingConflictContext.KIND_MERGE_TO_MASTER
         ) {
             if (ctx.deleteSourceOnComplete) {
-                cleanupTaskBranch(ctx.sourceBranch)
+                cleanupTaskBranch(ctx.sourceBranch, force = false)
+                if (
+                    ctx.kind == PendingConflictContext.KIND_MERGE_TO_MASTER &&
+                    config.useDevelopBranch &&
+                    config.returnToDevelopAfterRelease &&
+                    git.branchExistsLocal(config.developBranch)
+                ) {
+                    git.checkout(config.developBranch)
+                    finalBranch = config.developBranch
+                }
             } else {
                 restoreBranchIfExists(ctx.returnBranch)
                 finalBranch = ctx.returnBranch

@@ -19,6 +19,7 @@ class PendingConflictStateService : PersistentStateComponent<PendingConflictStat
         var returnBranch: String = "",
         var deleteSourceOnComplete: Boolean = false,
         var kind: String = "",
+        var remainingTargets: MutableList<String> = mutableListOf(),
     )
 
     data class State(
@@ -44,6 +45,7 @@ class PendingConflictStateService : PersistentStateComponent<PendingConflictStat
             returnBranch = stored.returnBranch,
             deleteSourceOnComplete = stored.deleteSourceOnComplete,
             kind = stored.kind,
+            remainingTargets = stored.remainingTargets.toList(),
         )
     }
 
@@ -59,6 +61,7 @@ class PendingConflictStateService : PersistentStateComponent<PendingConflictStat
             returnBranch = context.returnBranch,
             deleteSourceOnComplete = context.deleteSourceOnComplete,
             kind = context.kind,
+            remainingTargets = context.remainingTargets.toMutableList(),
         )
     }
 

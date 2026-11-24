@@ -3,6 +3,7 @@ package io.github.parkcg123.gitlane
 import io.github.parkcg123.gitlane.config.FlowConfig
 import io.github.parkcg123.gitlane.git.GitRunner
 import io.github.parkcg123.gitlane.workflow.ConflictPromptChoice
+import io.github.parkcg123.gitlane.workflow.MergeTargetChoice
 import io.github.parkcg123.gitlane.workflow.MergeToDevelopChoice
 import io.github.parkcg123.gitlane.workflow.PendingConflictContext
 import io.github.parkcg123.gitlane.workflow.WorkflowEngine
@@ -24,7 +25,10 @@ class WorkflowEngineTest {
         var taskName: String? = "login_fix",
         var dirtyStart: Boolean = false,
         var existingBranch: Boolean = false,
+        var mergeTargetChoice: MergeTargetChoice = MergeTargetChoice.DEVELOP,
         var mergeChoice: MergeToDevelopChoice = MergeToDevelopChoice.DELETE,
+        var deleteAlreadyMerged: Boolean = false,
+        var deleteTaskConfirm: Boolean = true,
         var releaseConfirm: Boolean = true,
         var abortConfirm: Boolean = true,
         var conflictAction: ConflictPromptChoice = ConflictPromptChoice.LATER,
@@ -38,11 +42,28 @@ class WorkflowEngineTest {
         override fun promptTaskName(datePrefix: String): String? = taskName
         override fun confirmDirtyStart(): Boolean = dirtyStart
         override fun confirmExistingBranch(branchName: String): Boolean = existingBranch
+        override fun promptMergeTarget(
+            taskBranch: String,
+            developBranch: String,
+            masterBranch: String,
+        ): MergeTargetChoice = mergeTargetChoice
+
         override fun confirmMergeToDevelop(
             taskBranch: String,
             developBranch: String,
             commitCount: Int,
         ): MergeToDevelopChoice = mergeChoice
+
+        override fun confirmDeleteAlreadyMergedBranch(
+            taskBranch: String,
+            targetSummary: String,
+        ): Boolean = deleteAlreadyMerged
+
+        override fun confirmDeleteTaskBranch(
+            taskBranch: String,
+            unmergedCommitCount: Int,
+            returnBranch: String,
+        ): Boolean = deleteTaskConfirm
 
         override fun confirmReleaseToMaster(
             developBranch: String,
@@ -420,5 +441,179 @@ class WorkflowEngineTest {
 
         wtGit.mergeAbort()
         assertFalse(GitRunner.hasMergeHeadFile(worktreeDir))
+    }
+
+    @Test
+    fun `getCurrentBranchFast resolves normal, subdirectory, worktree, detached HEAD, and non-git dir`(@TempDir root: Path) {
+        val nonGitDir = root.resolve("not-a-repo")
+        Files.createDirectories(nonGitDir)
+        assertNull(GitRunner.getCurrentBranchFast(nonGitDir))
+
+        val fixture = createFixture(root)
+        val subDir = fixture.work.resolve("nested/dir")
+        Files.createDirectories(subDir)
+        assertEquals("develop", GitRunner.getCurrentBranchFast(fixture.work))
+        assertEquals("develop", GitRunner.getCurrentBranchFast(subDir))
+
+        val worktreeDir = root.resolve("wt-branch")
+        runGit(fixture.peer, "worktree", "add", "-b", "wt-topic", worktreeDir.toString(), "HEAD")
+        assertEquals("wt-topic", GitRunner.getCurrentBranchFast(worktreeDir))
+
+        val headHash = runGit(fixture.work, "rev-parse", "HEAD")
+        runGit(fixture.work, "checkout", "--detach", headHash)
+        assertNull(GitRunner.getCurrentBranchFast(fixture.work))
+    }
+
+    @Test
+    fun `mergeToDevelop supports master-only, both targets with conflict continuation, and already-merged cleanup`(@TempDir root: Path) {
+        val fixture = createFixture(root)
+        val git = GitRunner(fixture.work)
+        val ui = ScriptedUi()
+        val engine = WorkflowEngine(git, ui, FlowConfig()) { fixedDate }
+
+        // 1) Task -> master directly while develop mode is enabled, delete branch, return to develop
+        ui.taskName = "master_only"
+        engine.startTask()
+        Files.writeString(fixture.work.resolve("master_only.txt"), "hotfix\n")
+        runGit(fixture.work, "add", "master_only.txt")
+        runGit(fixture.work, "commit", "-m", "fix: master only")
+
+        ui.mergeTargetChoice = MergeTargetChoice.MASTER
+        ui.mergeChoice = MergeToDevelopChoice.DELETE
+        val masterOnly = engine.mergeToDevelop()
+        assertEquals(WorkflowStatus.SUCCESS, masterOnly.status)
+        assertEquals("develop", git.getCurrentBranch())
+        assertFalse(git.branchExistsLocal("20261119_master_only"))
+        runGit(fixture.peer, "fetch", "origin")
+        assertEquals(
+            runGit(fixture.work, "rev-parse", "master"),
+            runGit(fixture.peer, "rev-parse", "origin/master"),
+        )
+
+        // 2) Task -> both (develop + master) cleanly
+        ui.taskName = "both_clean"
+        engine.startTask()
+        Files.writeString(fixture.work.resolve("both.txt"), "both\n")
+        runGit(fixture.work, "add", "both.txt")
+        runGit(fixture.work, "commit", "-m", "feat: both")
+
+        ui.mergeTargetChoice = MergeTargetChoice.BOTH
+        ui.mergeChoice = MergeToDevelopChoice.DELETE
+        val bothClean = engine.mergeToDevelop()
+        assertEquals(WorkflowStatus.SUCCESS, bothClean.status)
+        assertEquals("develop", git.getCurrentBranch())
+        assertFalse(git.branchExistsLocal("20261119_both_clean"))
+        runGit(fixture.peer, "fetch", "origin")
+        assertEquals(
+            runGit(fixture.work, "rev-parse", "develop"),
+            runGit(fixture.peer, "rev-parse", "origin/develop"),
+        )
+        assertEquals(
+            runGit(fixture.work, "rev-parse", "master"),
+            runGit(fixture.peer, "rev-parse", "origin/master"),
+        )
+
+        // 3) Task -> both where develop conflicts first, continueAfterConflict finishes master + deletes branch
+        ui.taskName = "both_conflict"
+        ui.conflictAction = ConflictPromptChoice.LATER
+        engine.startTask()
+        Files.writeString(fixture.work.resolve("app.txt"), "from task both\n")
+        runGit(fixture.work, "add", "app.txt")
+        runGit(fixture.work, "commit", "-m", "fix: task both")
+
+        runGit(fixture.peer, "checkout", "develop")
+        runGit(fixture.peer, "pull", "--ff-only", "origin", "develop")
+        Files.writeString(fixture.peer.resolve("app.txt"), "from peer dev\n")
+        runGit(fixture.peer, "add", "app.txt")
+        runGit(fixture.peer, "commit", "-m", "fix: peer dev")
+        runGit(fixture.peer, "push", "origin", "develop")
+
+        val conflicted = engine.mergeToDevelop()
+        assertEquals(WorkflowStatus.CONFLICT, conflicted.status)
+        assertEquals("develop", ui.getPendingConflict()?.targetBranch)
+        assertEquals(listOf("master"), ui.getPendingConflict()?.remainingTargets)
+
+        Files.writeString(fixture.work.resolve("app.txt"), "resolved both\n")
+        runGit(fixture.work, "add", "app.txt")
+
+        val resumed = engine.continueAfterConflict()
+        assertEquals(WorkflowStatus.SUCCESS, resumed.status)
+        assertEquals("develop", git.getCurrentBranch())
+        assertFalse(git.branchExistsLocal("20261119_both_conflict"))
+        assertNull(ui.getPendingConflict())
+        runGit(fixture.peer, "fetch", "origin")
+        assertEquals(
+            runGit(fixture.work, "rev-parse", "master"),
+            runGit(fixture.peer, "rev-parse", "origin/master"),
+        )
+
+        // 4) Already-merged branch cleanup prompt when 0 ahead
+        ui.taskName = "cleanup_after_keep"
+        engine.startTask()
+        Files.writeString(fixture.work.resolve("cleanup.txt"), "cleanup\n")
+        runGit(fixture.work, "add", "cleanup.txt")
+        runGit(fixture.work, "commit", "-m", "feat: cleanup")
+
+        ui.mergeTargetChoice = MergeTargetChoice.DEVELOP
+        ui.mergeChoice = MergeToDevelopChoice.KEEP
+        engine.mergeToDevelop()
+        assertEquals("20261119_cleanup_after_keep", git.getCurrentBranch())
+
+        ui.deleteAlreadyMerged = true
+        val cleaned = engine.mergeToDevelop()
+        assertEquals(WorkflowStatus.SUCCESS, cleaned.status)
+        assertEquals("develop", git.getCurrentBranch())
+        assertFalse(git.branchExistsLocal("20261119_cleanup_after_keep"))
+    }
+
+    @Test
+    fun `deleteTaskBranch guards protected and dirty states and supports merged (-d) and unmerged (-D) deletion`(@TempDir root: Path) {
+        val fixture = createFixture(root)
+        val git = GitRunner(fixture.work)
+        val ui = ScriptedUi()
+        val engine = WorkflowEngine(git, ui, FlowConfig()) { fixedDate }
+
+        // Guardrail 1: protected branch blocked
+        val blockedProtected = engine.deleteTaskBranch()
+        assertEquals(WorkflowStatus.BLOCKED, blockedProtected.status)
+
+        // Guardrail 2: dirty working tree blocked
+        ui.taskName = "delete_target"
+        engine.startTask()
+        Files.writeString(fixture.work.resolve("dirty.txt"), "dirty\n")
+        val blockedDirty = engine.deleteTaskBranch()
+        assertEquals(WorkflowStatus.BLOCKED, blockedDirty.status)
+
+        // Unmerged commit -> cancel then force delete
+        runGit(fixture.work, "add", "dirty.txt")
+        runGit(fixture.work, "commit", "-m", "wip: unmerged")
+
+        ui.deleteTaskConfirm = false
+        val cancelled = engine.deleteTaskBranch()
+        assertEquals(WorkflowStatus.CANCELLED, cancelled.status)
+        assertTrue(git.branchExistsLocal("20261119_delete_target"))
+
+        ui.deleteTaskConfirm = true
+        val deletedUnmerged = engine.deleteTaskBranch()
+        assertEquals(WorkflowStatus.SUCCESS, deletedUnmerged.status)
+        assertEquals("develop", git.getCurrentBranch())
+        assertFalse(git.branchExistsLocal("20261119_delete_target"))
+
+        // Safe delete (-d) for branch already merged into develop
+        ui.taskName = "merged_safe_delete"
+        engine.startTask()
+        Files.writeString(fixture.work.resolve("merged.txt"), "merged\n")
+        runGit(fixture.work, "add", "merged.txt")
+        runGit(fixture.work, "commit", "-m", "feat: merged")
+
+        ui.mergeTargetChoice = MergeTargetChoice.DEVELOP
+        ui.mergeChoice = MergeToDevelopChoice.KEEP
+        engine.mergeToDevelop()
+        assertEquals("20261119_merged_safe_delete", git.getCurrentBranch())
+
+        val deletedMerged = engine.deleteTaskBranch()
+        assertEquals(WorkflowStatus.SUCCESS, deletedMerged.status)
+        assertEquals("develop", git.getCurrentBranch())
+        assertFalse(git.branchExistsLocal("20261119_merged_safe_delete"))
     }
 }

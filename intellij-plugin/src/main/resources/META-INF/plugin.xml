@@ -22,6 +22,7 @@
 
     <change-notes><![CDATA[
         <ul>
+            <li><b>0.3.0</b>: Added merge target selection (<code>develop</code>, <code>master</code>, or both), standalone task branch deletion (with safe vs. unmerged warning), cleanup prompt when already merged, and hiding task-branch merge/delete actions outside task branches.</li>
             <li><b>0.2.1</b>: Show conflict resolution actions (3-Way Merge, Complete Merge, Abort Merge) only while a merge conflict is in progress, keeping the GitLane menu clean during normal work.</li>
             <li><b>0.2.0</b>: Added <code>useDevelopBranch</code> option (<code>.gitlane.json</code>) to support branching from and merging directly into <code>master</code> without a <code>develop</code> branch.</li>
             <li><b>0.1.1</b>: Replaced deprecated <code>AbstractVcsHelper.showMergeDialog</code> with <code>GitConflictResolver</code> for full IntelliJ IDEA 2026.2+ compatibility.</li>
@@ -56,8 +57,13 @@
 
             <action id="GitLane.MergeToDevelop"
                     class="io.github.parkcg123.gitlane.actions.MergeToDevelopAction"
-                    text="② 스테이지 반영 (develop 병합)"
-                    description="현재 작업 브랜치를 develop에 병합하고 푸시합니다."/>
+                    text="② 작업 반영 (병합 / 완료)"
+                    description="현재 작업 브랜치를 develop 또는 master(또는 둘 다)에 병합하고 푸시합니다."/>
+
+            <action id="GitLane.DeleteTaskBranch"
+                    class="io.github.parkcg123.gitlane.actions.DeleteTaskBranchAction"
+                    text="작업 브랜치 삭제"
+                    description="현재 작업 브랜치를 삭제하고 기준 브랜치로 복귀합니다."/>
 
             <action id="GitLane.ReleaseToMaster"
                     class="io.github.parkcg123.gitlane.actions.ReleaseToMasterAction"

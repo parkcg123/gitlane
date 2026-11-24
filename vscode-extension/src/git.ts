@@ -301,8 +301,8 @@ export class GitClient {
     await this.runOrThrow(['push', '-u', remote, branch]);
   }
 
-  async deleteLocalBranch(branch: string): Promise<void> {
-    await this.runOrThrow(['branch', '-d', branch]);
+  async deleteLocalBranch(branch: string, force = false): Promise<void> {
+    await this.runOrThrow(['branch', force ? '-D' : '-d', branch]);
   }
 
   async deleteRemoteBranch(remote: string, branch: string): Promise<void> {

@@ -9,6 +9,7 @@ import com.intellij.openapi.vfs.VfsUtil
 import git4idea.repo.GitRepositoryManager
 import io.github.parkcg123.gitlane.config.FlowConfig
 import io.github.parkcg123.gitlane.git.GitRunner
+import io.github.parkcg123.gitlane.naming.BranchNamer
 import java.nio.file.Path
 
 object IntelliJGitSupport {
@@ -27,6 +28,21 @@ object IntelliJGitSupport {
                 ?: project.basePath?.let { Path.of(it) }
                 ?: return@runCatching false
             GitRunner.hasMergeHeadFile(root)
+        }.getOrDefault(false)
+    }
+
+    fun isOnTaskBranchFast(project: Project): Boolean {
+        if (project.isDisposed) {
+            return false
+        }
+        return runCatching {
+            val repo = GitRepositoryManager.getInstance(project).repositories.firstOrNull()
+            val root = repo?.root?.toNioPath() ?: project.basePath?.let { Path.of(it) }
+            val branch = repo?.currentBranchName
+                ?: root?.let { GitRunner.getCurrentBranchFast(it) }
+                ?: return@runCatching false
+            val config = resolveQuickConfig(project)
+            !BranchNamer.isProtectedBranch(branch, config)
         }.getOrDefault(false)
     }
 

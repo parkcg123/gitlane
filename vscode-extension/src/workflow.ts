@@ -2,12 +2,15 @@ import { FlowConfig, getTaskBaseBranch } from './config';
 import { GitClient } from './git';
 import { buildTaskBranchName, formatLocalDate, isProtectedBranch, validateTaskName } from './naming';
 
+export type MergeTargetChoice = 'develop' | 'master' | 'both' | 'cancel';
+
 export interface PendingConflictContext {
   targetBranch: string;
   sourceBranch: string;
   returnBranch: string;
   deleteSourceOnComplete: boolean;
   kind: 'mergeToDevelop' | 'mergeToMaster' | 'releaseToMaster';
+  remainingTargets?: string[];
   initialConflictedFiles?: string[];
 }
 
@@ -24,11 +27,22 @@ export interface WorkflowUI {
   promptTaskName(datePrefix: string): Promise<string | undefined>;
   confirmDirtyStart(): Promise<'stash' | 'cancel'>;
   confirmExistingBranch(branchName: string): Promise<'checkout' | 'cancel'>;
+  promptMergeTarget(
+    taskBranch: string,
+    developBranch: string,
+    masterBranch: string
+  ): Promise<MergeTargetChoice>;
   confirmMergeToDevelop(
     taskBranch: string,
     developBranch: string,
     commitCount: number
   ): Promise<'delete' | 'keep' | 'cancel'>;
+  confirmDeleteAlreadyMergedBranch(taskBranch: string, targetSummary: string): Promise<boolean>;
+  confirmDeleteTaskBranch(
+    taskBranch: string,
+    unmergedCommitCount: number,
+    returnBranch: string
+  ): Promise<boolean>;
   confirmReleaseToMaster(
     developBranch: string,
     masterBranch: string,
@@ -97,8 +111,8 @@ export class WorkflowService {
     return false;
   }
 
-  private async cleanupTaskBranch(taskBranch: string): Promise<void> {
-    await this.git.deleteLocalBranch(taskBranch);
+  private async cleanupTaskBranch(taskBranch: string, force = false): Promise<void> {
+    await this.git.deleteLocalBranch(taskBranch, force);
     if (
       (await this.git.hasRemote(this.config.remote)) &&
       (await this.git.branchExistsRemote(this.config.remote, taskBranch))
@@ -213,8 +227,107 @@ export class WorkflowService {
     return { status: 'success', branch: taskBranch, message: msg };
   }
 
+  private resolveSelectedTargets(choice: MergeTargetChoice): string[] {
+    if (choice === 'develop') {
+      return [this.config.developBranch];
+    }
+    if (choice === 'master') {
+      return [this.config.masterBranch];
+    }
+    if (choice === 'both') {
+      return this.config.developBranch === this.config.masterBranch
+        ? [this.config.masterBranch]
+        : [this.config.developBranch, this.config.masterBranch];
+    }
+    return [];
+  }
+
+  private async executeTaskMergeTargets(params: {
+    taskBranch: string;
+    targets: string[];
+    deleteSourceOnComplete: boolean;
+    alreadySynced: boolean;
+    completedTargets?: string[];
+    anyPushedSoFar?: boolean;
+  }): Promise<WorkflowResult> {
+    const doneTargets = [...(params.completedTargets ?? [])];
+    let anyPushed = params.anyPushedSoFar ?? false;
+
+    for (let i = 0; i < params.targets.length; i++) {
+      const target = params.targets[i];
+      const remaining = params.targets.slice(i + 1);
+
+      if (!params.alreadySynced) {
+        await this.syncBranch(target);
+        const remainingAhead = await this.git.getAheadCommits(target, params.taskBranch);
+        if (remainingAhead.length === 0) {
+          doneTargets.push(target);
+          continue;
+        }
+      } else if ((await this.git.getCurrentBranch()) !== target) {
+        await this.git.checkout(target);
+      }
+
+      const mergeResult = await this.git.merge(
+        params.taskBranch,
+        this.config.useNoFastForwardMerge
+      );
+      if (mergeResult.conflicted) {
+        const kind = target === this.config.masterBranch ? 'mergeToMaster' : 'mergeToDevelop';
+        return this.handleMergeConflict(
+          {
+            targetBranch: target,
+            sourceBranch: params.taskBranch,
+            returnBranch: params.taskBranch,
+            deleteSourceOnComplete: params.deleteSourceOnComplete,
+            kind,
+            remainingTargets: remaining.length > 0 ? remaining : undefined,
+            initialConflictedFiles: mergeResult.conflictedFiles,
+          },
+          mergeResult.conflictedFiles
+        );
+      }
+
+      const pushed = await this.pushIfRemoteExists(target);
+      anyPushed = anyPushed || pushed;
+      doneTargets.push(target);
+    }
+
+    let finalBranch = params.targets[params.targets.length - 1];
+    if (params.deleteSourceOnComplete) {
+      // Delete while HEAD is still on the merged target so `git branch -d` succeeds even for master-only merges.
+      await this.cleanupTaskBranch(params.taskBranch, false);
+      if (
+        this.config.useDevelopBranch &&
+        this.config.returnToDevelopAfterRelease &&
+        finalBranch === this.config.masterBranch &&
+        (await this.git.branchExistsLocal(this.config.developBranch))
+      ) {
+        await this.git.checkout(this.config.developBranch);
+        finalBranch = this.config.developBranch;
+      }
+    } else {
+      await this.git.checkout(params.taskBranch);
+      finalBranch = params.taskBranch;
+    }
+
+    await this.ui.setPendingConflict(undefined);
+    const targetsLabel = doneTargets.join(' + ');
+    const pushSuffix = anyPushed ? ' 및 푸시' : ' (로컬 전용)';
+    const branchSuffix = params.deleteSourceOnComplete
+      ? `, '${params.taskBranch}' 삭제`
+      : `, '${params.taskBranch}' 유지`;
+    const msg = `'${params.taskBranch}' → '${targetsLabel}' 병합${pushSuffix} 완료${branchSuffix}`;
+    await this.ui.showInfo(msg);
+    return {
+      status: 'success',
+      branch: finalBranch,
+      message: msg,
+    };
+  }
+
   /**
-   * Action 2: Merge current task branch into target base branch (`develop`, or `master` when `useDevelopBranch` is false) and push.
+   * Action 2: Merge current task branch into selected target branch(es) (`develop`, `master`, or both) and optionally delete it.
    */
   async mergeToDevelop(): Promise<WorkflowResult> {
     const blocked = await this.checkInProgressState();
@@ -222,8 +335,7 @@ export class WorkflowService {
       return blocked;
     }
 
-    const targetBranch = getTaskBaseBranch(this.config);
-    const actionLabel = this.config.useDevelopBranch ? '스테이지 반영' : '운영 반영';
+    const actionLabel = this.config.useDevelopBranch ? '작업 반영' : '운영 반영';
 
     const taskBranch = await this.git.getCurrentBranch();
     if (!taskBranch) {
@@ -244,20 +356,58 @@ export class WorkflowService {
       return { status: 'blocked', message: msg };
     }
 
-    await this.syncBranch(targetBranch);
-    const aheadCommits = await this.git.getAheadCommits(targetBranch, taskBranch);
+    let selectedTargets: string[];
+    if (this.config.useDevelopBranch) {
+      const targetChoice = await this.ui.promptMergeTarget(
+        taskBranch,
+        this.config.developBranch,
+        this.config.masterBranch
+      );
+      if (targetChoice === 'cancel') {
+        return { status: 'cancelled', branch: taskBranch, message: `${actionLabel}을 취소했습니다.` };
+      }
+      selectedTargets = this.resolveSelectedTargets(targetChoice);
+    } else {
+      selectedTargets = [this.config.masterBranch];
+    }
 
-    if (aheadCommits.length === 0) {
+    const targetCounts: Array<{ branch: string; count: number }> = [];
+    for (const target of selectedTargets) {
+      await this.syncBranch(target);
+      const aheadCommits = await this.git.getAheadCommits(target, taskBranch);
+      targetCounts.push({ branch: target, count: aheadCommits.length });
+    }
+
+    const effectiveTargets = targetCounts.filter((item) => item.count > 0);
+    if (effectiveTargets.length === 0) {
+      const targetSummary = selectedTargets.join(' + ');
+      const shouldDelete = await this.ui.confirmDeleteAlreadyMergedBranch(taskBranch, targetSummary);
+      if (shouldDelete) {
+        const landingBranch =
+          this.config.useDevelopBranch && selectedTargets.includes(this.config.developBranch)
+            ? this.config.developBranch
+            : selectedTargets[0];
+        if ((await this.git.getCurrentBranch()) !== landingBranch) {
+          await this.git.checkout(landingBranch);
+        }
+        await this.cleanupTaskBranch(taskBranch, false);
+        const msg = `'${taskBranch}'는 이미 '${targetSummary}'에 반영되어 있어 브랜치를 삭제했습니다.`;
+        await this.ui.showInfo(msg);
+        return { status: 'success', branch: landingBranch, message: msg };
+      }
+
       await this.git.checkout(taskBranch);
-      const msg = `${targetBranch}에 병합할 새 커밋이 없습니다.`;
+      const msg = `${targetSummary}에 병합할 새 커밋이 없습니다.`;
       await this.ui.showInfo(msg);
       return { status: 'noop', branch: taskBranch, message: msg };
     }
 
+    const effectiveBranches = effectiveTargets.map((item) => item.branch);
+    const maxCommitCount = Math.max(...effectiveTargets.map((item) => item.count));
     const choice = await this.ui.confirmMergeToDevelop(
       taskBranch,
-      targetBranch,
-      aheadCommits.length
+      effectiveBranches.join(' + '),
+      maxCommitCount
     );
 
     if (choice === 'cancel') {
@@ -265,39 +415,106 @@ export class WorkflowService {
       return { status: 'cancelled', branch: taskBranch, message: `${actionLabel}을 취소했습니다.` };
     }
 
-    const mergeResult = await this.git.merge(taskBranch, this.config.useNoFastForwardMerge);
-    if (mergeResult.conflicted) {
-      return this.handleMergeConflict(
-        {
-          targetBranch,
-          sourceBranch: taskBranch,
-          returnBranch: taskBranch,
-          deleteSourceOnComplete: choice === 'delete',
-          kind: this.config.useDevelopBranch ? 'mergeToDevelop' : 'mergeToMaster',
-          initialConflictedFiles: mergeResult.conflictedFiles,
-        },
-        mergeResult.conflictedFiles
-      );
+    return this.executeTaskMergeTargets({
+      taskBranch,
+      targets: effectiveBranches,
+      deleteSourceOnComplete: choice === 'delete',
+      alreadySynced: true,
+    });
+  }
+
+  /**
+   * Standalone Action: Delete the current non-protected task branch (safe `-d` if merged, warning + `-D` if unmerged).
+   */
+  async deleteTaskBranch(): Promise<WorkflowResult> {
+    const blocked = await this.checkInProgressState();
+    if (blocked) {
+      return blocked;
     }
 
-    const pushed = await this.pushIfRemoteExists(targetBranch);
+    const taskBranch = await this.git.getCurrentBranch();
+    if (!taskBranch) {
+      const msg = 'Detached HEAD 상태에서는 브랜치 삭제를 진행할 수 없습니다.';
+      await this.ui.showWarning(msg);
+      return { status: 'blocked', message: msg };
+    }
 
-    if (choice === 'delete') {
-      await this.cleanupTaskBranch(taskBranch);
+    if (isProtectedBranch(taskBranch, this.config)) {
+      const msg = `보호 브랜치('${taskBranch}')는 삭제할 수 없습니다.`;
+      await this.ui.showWarning(msg);
+      return { status: 'blocked', message: msg };
+    }
+
+    if (await this.git.hasUncommittedChanges()) {
+      const msg = '커밋되지 않은 변경사항이 있습니다. 먼저 커밋하거나 Stash한 뒤 다시 시도해 주세요.';
+      await this.ui.showWarning(msg);
+      return { status: 'blocked', message: msg };
+    }
+
+    const candidateBases = this.config.useDevelopBranch
+      ? [this.config.developBranch, this.config.masterBranch]
+      : [this.config.masterBranch];
+
+    let mergedTarget: string | undefined;
+    for (const candidate of candidateBases) {
+      if (await this.git.branchExistsLocal(candidate)) {
+        const ahead = await this.git.getAheadCommits(candidate, taskBranch);
+        if (ahead.length === 0) {
+          mergedTarget = candidate;
+          break;
+        }
+      }
+    }
+
+    const preferredBase = getTaskBaseBranch(this.config);
+    let returnBranch: string | undefined;
+    if (await this.git.branchExistsLocal(preferredBase)) {
+      returnBranch = preferredBase;
     } else {
-      await this.git.checkout(taskBranch);
+      for (const candidate of candidateBases) {
+        if (await this.git.branchExistsLocal(candidate)) {
+          returnBranch = candidate;
+          break;
+        }
+      }
     }
 
-    await this.ui.setPendingConflict(undefined);
-    const pushSuffix = pushed ? ' 및 푸시' : ' (로컬 전용)';
-    const branchSuffix = choice === 'delete' ? `, '${taskBranch}' 삭제` : `, '${taskBranch}' 유지`;
-    const msg = `'${taskBranch}' → '${targetBranch}' 병합${pushSuffix} 완료${branchSuffix}`;
+    if (!returnBranch) {
+      const created = await this.git.ensureLocalBranch(preferredBase, this.config.remote);
+      if (created) {
+        returnBranch = preferredBase;
+      } else {
+        throw new Error(`복귀할 기준 브랜치('${preferredBase}')를 찾을 수 없습니다.`);
+      }
+    }
+
+    const unmergedCommitCount = mergedTarget
+      ? 0
+      : (await this.git.getAheadCommits(returnBranch, taskBranch)).length;
+
+    const confirmed = await this.ui.confirmDeleteTaskBranch(
+      taskBranch,
+      unmergedCommitCount,
+      returnBranch
+    );
+    if (!confirmed) {
+      return { status: 'cancelled', branch: taskBranch, message: '브랜치 삭제를 취소했습니다.' };
+    }
+
+    if (mergedTarget) {
+      await this.git.checkout(mergedTarget);
+      await this.cleanupTaskBranch(taskBranch, false);
+      if (returnBranch !== mergedTarget) {
+        await this.git.checkout(returnBranch);
+      }
+    } else {
+      await this.git.checkout(returnBranch);
+      await this.cleanupTaskBranch(taskBranch, true);
+    }
+
+    const msg = `'${taskBranch}' 브랜치를 삭제하고 '${returnBranch}'로 이동했습니다.`;
     await this.ui.showInfo(msg);
-    return {
-      status: 'success',
-      branch: choice === 'delete' ? targetBranch : taskBranch,
-      message: msg,
-    };
+    return { status: 'success', branch: returnBranch, message: msg };
   }
 
   /**
@@ -436,10 +653,35 @@ export class WorkflowService {
     await this.git.commitMerge();
     const pushed = targetBranch ? await this.pushIfRemoteExists(targetBranch) : false;
 
+    if (
+      (ctx?.kind === 'mergeToDevelop' || ctx?.kind === 'mergeToMaster') &&
+      ctx.remainingTargets &&
+      ctx.remainingTargets.length > 0
+    ) {
+      await this.ui.setPendingConflict(undefined);
+      return this.executeTaskMergeTargets({
+        taskBranch: ctx.sourceBranch,
+        targets: ctx.remainingTargets,
+        deleteSourceOnComplete: ctx.deleteSourceOnComplete,
+        alreadySynced: false,
+        completedTargets: targetBranch ? [targetBranch] : [],
+        anyPushedSoFar: pushed,
+      });
+    }
+
     let finalBranch = targetBranch ?? undefined;
     if (ctx?.kind === 'mergeToDevelop' || ctx?.kind === 'mergeToMaster') {
       if (ctx.deleteSourceOnComplete) {
-        await this.cleanupTaskBranch(ctx.sourceBranch);
+        await this.cleanupTaskBranch(ctx.sourceBranch, false);
+        if (
+          ctx.kind === 'mergeToMaster' &&
+          this.config.useDevelopBranch &&
+          this.config.returnToDevelopAfterRelease &&
+          (await this.git.branchExistsLocal(this.config.developBranch))
+        ) {
+          await this.git.checkout(this.config.developBranch);
+          finalBranch = this.config.developBranch;
+        }
       } else {
         await this.restoreBranchIfExists(ctx.returnBranch);
         finalBranch = ctx.returnBranch;
