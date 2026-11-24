@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as vscode from 'vscode';
 import { ConflictManagerPanel } from './conflictPanel';
-import { FlowConfig, loadRepoConfig } from './config';
+import { CONFIG_FILENAME, FlowConfig, loadRepoConfig } from './config';
 import { GitClient, GitError } from './git';
 import { isProtectedBranch, sanitizeTaskName, validateTaskName } from './naming';
 import {
@@ -14,6 +14,7 @@ import {
 } from './repoDiscovery';
 import { FlowStatusBar, RepoStatusTarget } from './statusBar';
 import {
+  detectRecommendedConfig,
   MergeTargetChoice,
   PendingConflictContext,
   WorkflowService,
@@ -194,6 +195,17 @@ class VscodeWorkflowUI implements WorkflowUI {
     return picked === '임시 저장(Stash) 후 진행' ? 'stash' : 'cancel';
   }
 
+  async confirmPopStash(taskBranch: string): Promise<boolean> {
+    const picked = await vscode.window.showInformationMessage(
+      this.prefixMessage(
+        `임시 저장(Stash)한 변경사항을 '${taskBranch}' 브랜치로 바로 복원(Stash Pop)할까요?`
+      ),
+      { modal: true },
+      '변경사항 복원'
+    );
+    return picked === '변경사항 복원';
+  }
+
   async confirmExistingBranch(branchName: string): Promise<'checkout' | 'cancel'> {
     const picked = await vscode.window.showInformationMessage(
       this.prefixMessage(`'${branchName}' 브랜치가 이미 존재합니다. 해당 브랜치로 이동할까요?`),
@@ -250,10 +262,11 @@ class VscodeWorkflowUI implements WorkflowUI {
   async confirmMergeToDevelop(
     taskBranch: string,
     developBranch: string,
-    commitCount: number
+    commitCount: number,
+    aheadCommits: string[]
   ): Promise<'delete' | 'keep' | 'cancel'> {
     interface MergeQuickPickItem extends vscode.QuickPickItem {
-      action: 'delete' | 'keep' | 'cancel';
+      action?: 'delete' | 'keep' | 'cancel';
     }
 
     const isMultiTarget = developBranch.includes(' + ');
@@ -261,17 +274,19 @@ class VscodeWorkflowUI implements WorkflowUI {
       {
         label: '$(trash) 병합 + 푸시 + 브랜치 삭제',
         description: `${taskBranch} → ${developBranch} (${commitCount}개 커밋)`,
-        detail: isMultiTarget || !this.useDevelopBranch
-          ? '병합 및 푸시 완료 후 작업 브랜치를 정리합니다.'
-          : '반영 후 작업 브랜치를 정리합니다.',
+        detail:
+          isMultiTarget || !this.useDevelopBranch
+            ? '병합 및 푸시 완료 후 작업 브랜치를 정리합니다.'
+            : '반영 후 작업 브랜치를 정리합니다.',
         action: 'delete',
       },
       {
         label: '$(git-branch) 병합 + 푸시 (브랜치 유지)',
         description: `${taskBranch} → ${developBranch} (${commitCount}개 커밋)`,
-        detail: isMultiTarget || !this.useDevelopBranch
-          ? '추가 수정이 필요하면 작업 브랜치를 유지합니다.'
-          : '확인 중 추가 수정이 필요하면 작업 브랜치를 유지합니다.',
+        detail:
+          isMultiTarget || !this.useDevelopBranch
+            ? '추가 수정이 필요하면 작업 브랜치를 유지합니다.'
+            : '확인 중 추가 수정이 필요하면 작업 브랜치를 유지합니다.',
         action: 'keep',
       },
       {
@@ -281,16 +296,50 @@ class VscodeWorkflowUI implements WorkflowUI {
       },
     ];
 
+    if (aheadCommits.length > 0) {
+      items.push({
+        label: `포함된 커밋 미리보기 (${commitCount}건)`,
+        kind: vscode.QuickPickItemKind.Separator,
+      });
+      for (const line of aheadCommits.slice(0, 5)) {
+        items.push({ label: `$(git-commit) ${line}` });
+      }
+      if (aheadCommits.length > 5) {
+        items.push({ label: `... 외 ${aheadCommits.length - 5}건` });
+      }
+    }
+
     const baseTitle = this.useDevelopBranch
       ? `② 작업 반영 (${taskBranch} → ${developBranch})`
       : `② 운영 바로 반영 (${taskBranch} → ${developBranch})`;
-    const picked = await vscode.window.showQuickPick(items, {
-      title: this.titleWithRepo(baseTitle),
-      placeHolder: `반영 방식 선택 (최대 ${commitCount}개 커밋)`,
-      ignoreFocusOut: true,
-    });
 
-    return picked?.action ?? 'cancel';
+    return new Promise((resolve) => {
+      const quickPick = vscode.window.createQuickPick<MergeQuickPickItem>();
+      quickPick.title = this.titleWithRepo(baseTitle);
+      quickPick.placeholder = `반영 방식 선택 (최대 ${commitCount}개 커밋)`;
+      quickPick.ignoreFocusOut = true;
+      quickPick.items = items;
+
+      let settled = false;
+      const finish = (choice: 'delete' | 'keep' | 'cancel') => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        quickPick.dispose();
+        resolve(choice);
+      };
+
+      quickPick.onDidAccept(() => {
+        const picked = quickPick.selectedItems[0];
+        if (picked?.action) {
+          finish(picked.action);
+        }
+      });
+
+      quickPick.onDidHide(() => finish('cancel'));
+      quickPick.show();
+    });
   }
 
   async confirmDeleteAlreadyMergedBranch(
@@ -329,6 +378,24 @@ class VscodeWorkflowUI implements WorkflowUI {
       confirmLabel
     );
     return picked === confirmLabel;
+  }
+
+  async promptSelectBranchesToDelete(branches: string[]): Promise<string[] | undefined> {
+    const items = branches.map((branch) => ({
+      label: `$(git-branch) ${branch}`,
+      description: '이미 병합 완료됨',
+      branch,
+      picked: true,
+    }));
+
+    const picked = await vscode.window.showQuickPick(items, {
+      canPickMany: true,
+      title: this.titleWithRepo('완료된 작업 브랜치 일괄 정리'),
+      placeHolder: '삭제할 브랜치를 선택하세요 (이미 병합 완료된 브랜치만 표시)',
+      ignoreFocusOut: true,
+    });
+
+    return picked?.map((item) => item.branch);
   }
 
   async confirmReleaseToMaster(
@@ -644,6 +711,65 @@ export function activate(context: vscode.ExtensionContext): void {
     lastSelectedRepoRoot = root;
   };
 
+  const initOrOpenConfig = async (repo: DiscoveredRepo, isMultiRepo: boolean): Promise<void> => {
+    setLastRoot(repo.root);
+    const configPath = path.join(repo.root, CONFIG_FILENAME);
+    if (fs.existsSync(configPath)) {
+      await vscode.window.showTextDocument(vscode.Uri.file(configPath), { preview: false });
+      return;
+    }
+
+    const git = new GitClient(repo.root);
+    const detected = await detectRecommendedConfig(git);
+    const detectedDesc = detected.useDevelopBranch
+      ? `2단계 (${detected.developBranch} → ${detected.masterBranch})`
+      : `운영 직행 (${detected.masterBranch} 바로 반영)`;
+
+    interface ConfigPresetItem extends vscode.QuickPickItem {
+      config?: FlowConfig;
+    }
+
+    const presetItems: ConfigPresetItem[] = [
+      {
+        label: '$(sparkle) 자동 감지 추천 설정으로 생성',
+        description: detectedDesc,
+        detail: '현재 저장소의 브랜치 구성을 감지해 .gitlane.json 파일을 생성합니다.',
+        config: detected,
+      },
+      {
+        label: `$(git-branch) 2단계 모드 (develop → ${detected.masterBranch})`,
+        description: `develop → YYYYMMDD_작업 → develop → ${detected.masterBranch}`,
+        config: {
+          ...detected,
+          useDevelopBranch: true,
+        },
+      },
+      {
+        label: `$(rocket) 운영 직행 모드 (develop 없이 ${detected.masterBranch} 바로 반영)`,
+        description: `${detected.masterBranch} → YYYYMMDD_작업 → ${detected.masterBranch}`,
+        config: {
+          ...detected,
+          useDevelopBranch: false,
+        },
+      },
+    ];
+
+    const picked = await vscode.window.showQuickPick(presetItems, {
+      title: isMultiRepo ? `GitLane [${repo.label}] — 설정 (.gitlane.json)` : 'GitLane — 설정 (.gitlane.json)',
+      placeHolder: '.gitlane.json 파일이 없습니다. 생성할 워크플로우 모드를 선택하세요',
+      ignoreFocusOut: true,
+    });
+    if (!picked?.config) {
+      return;
+    }
+
+    fs.writeFileSync(configPath, `${JSON.stringify(picked.config, null, 2)}\n`, 'utf8');
+    await vscode.window.showTextDocument(vscode.Uri.file(configPath), { preview: false });
+    await refreshGitUi(statusBar, conflictPanel, getLastRoot, onGitActivated);
+    const prefix = isMultiRepo ? `[${repo.label}] ` : '';
+    void vscode.window.showInformationMessage(`${prefix}${CONFIG_FILENAME} 설정 파일을 생성했습니다.`);
+  };
+
   const openMenuForSingleRepo = async (repo: DiscoveredRepo): Promise<void> => {
     await withWorkflowContext(
       context,
@@ -704,7 +830,7 @@ export function activate(context: vscode.ExtensionContext): void {
         const rawBranch = await git.getCurrentBranch();
         const currentBranch = rawBranch ?? 'HEAD 분리됨';
         const onTaskBranch = rawBranch !== null && !isProtectedBranch(rawBranch, config);
-        const menuItems: Array<RepoWorkflowMenuItem & { run: () => Promise<void> }> = [
+        const menuItems: RepoWorkflowMenuItem[] = [
           {
             label: '$(git-branch) ① 작업 시작 (브랜치 생성)',
             description: `${config.useDevelopBranch ? config.developBranch : config.masterBranch} → YYYYMMDD${config.separator}작업명`,
@@ -746,6 +872,27 @@ export function activate(context: vscode.ExtensionContext): void {
             },
           });
         }
+
+        menuItems.push(
+          {
+            label: '도구 / 설정',
+            kind: vscode.QuickPickItemKind.Separator,
+          },
+          {
+            label: '$(clear-all) 완료된 작업 브랜치 정리',
+            description: '이미 병합 완료된 로컬 작업 브랜치 일괄 삭제',
+            run: async () => {
+              await service.cleanupMergedBranches();
+            },
+          },
+          {
+            label: '$(gear) 설정 (.gitlane.json)',
+            description: '저장소 설정 파일 생성 또는 열기',
+            run: async () => {
+              await initOrOpenConfig(repo, false);
+            },
+          }
+        );
 
         const picked = await vscode.window.showQuickPick(menuItems, {
           title: `GitLane (현재: ${currentBranch})`,
@@ -890,6 +1037,35 @@ export function activate(context: vscode.ExtensionContext): void {
       }
     }
 
+    const targetForTools = activeRepo ?? repos[0];
+    items.push(
+      {
+        label: '도구 / 설정',
+        kind: vscode.QuickPickItemKind.Separator,
+      },
+      {
+        label: `$(clear-all) [${targetForTools.label}] 완료된 작업 브랜치 정리`,
+        description: '이미 병합 완료된 로컬 작업 브랜치 일괄 삭제',
+        run: () =>
+          withWorkflowContext(
+            context,
+            statusBar,
+            conflictPanel,
+            getLastRoot,
+            setLastRoot,
+            onGitActivated,
+            async (service) => void (await service.cleanupMergedBranches()),
+            targetForTools,
+            true
+          ),
+      },
+      {
+        label: `$(gear) [${targetForTools.label}] 설정 (.gitlane.json)`,
+        description: '저장소 설정 파일 생성 또는 열기',
+        run: () => initOrOpenConfig(targetForTools, true),
+      }
+    );
+
     const picked = await vscode.window.showQuickPick(items, {
       title: `GitLane — 저장소 ${repos.length}개`,
       placeHolder: '저장소별 실행할 워크플로우를 선택하세요 (저장소명 검색 가능)',
@@ -1015,7 +1191,33 @@ export function activate(context: vscode.ExtensionContext): void {
           await service.abortMerge();
         }
       )
-    )
+    ),
+
+    vscode.commands.registerCommand('gitlane.cleanupMergedBranches', () =>
+      withWorkflowContext(
+        context,
+        statusBar,
+        conflictPanel,
+        getLastRoot,
+        setLastRoot,
+        onGitActivated,
+        async (service) => {
+          await service.cleanupMergedBranches();
+        }
+      )
+    ),
+
+    vscode.commands.registerCommand('gitlane.initConfig', async () => {
+      const repos = discoverWorkspaceRepos(onGitActivated);
+      const targetRepo = resolveActiveRepo(repos, lastSelectedRepoRoot);
+      if (!targetRepo) {
+        await vscode.window.showWarningMessage(
+          '열려 있는 Git 저장소를 찾을 수 없습니다. 프로젝트 폴더를 열어 주세요.'
+        );
+        return;
+      }
+      await initOrOpenConfig(targetRepo, repos.length >= 2);
+    })
   );
 
   scheduleRefresh();

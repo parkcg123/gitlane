@@ -54,4 +54,4 @@ jobs:
       - name: Test and build plugin
         run: |
           chmod +x gradlew
-          ./gradlew test buildPlugin
+          ./gradlew test buildPlugin verifyPluginProjectConfiguration

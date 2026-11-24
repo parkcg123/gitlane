@@ -5,9 +5,12 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.components.service
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.InputValidatorEx
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.ui.CheckBoxList
+import com.intellij.ui.components.JBScrollPane
 import git4idea.merge.GitConflictResolver
 import git4idea.repo.GitRepositoryManager
 import io.github.parkcg123.gitlane.naming.BranchNamer
@@ -88,6 +91,20 @@ class IntelliJWorkflowUi(
         }
     }
 
+    override fun confirmPopStash(taskBranch: String): Boolean {
+        return runOnEdtAndGet {
+            val answer = Messages.showYesNoDialog(
+                project,
+                "임시 저장(Stash)한 변경사항을 '$taskBranch' 브랜치로 바로 복원(Stash Pop)할까요?",
+                dialogTitle("① 작업 시작"),
+                "변경사항 복원",
+                "나중에",
+                Messages.getQuestionIcon(),
+            )
+            answer == Messages.YES
+        }
+    }
+
     override fun confirmExistingBranch(branchName: String): Boolean {
         return runOnEdtAndGet {
             val answer = Messages.showYesNoDialog(
@@ -134,6 +151,7 @@ class IntelliJWorkflowUi(
         taskBranch: String,
         developBranch: String,
         commitCount: Int,
+        aheadCommits: List<String>,
     ): MergeToDevelopChoice {
         val title = if (useDevelopBranch) {
             dialogTitle("② 작업 반영 ($taskBranch → $developBranch)")
@@ -141,10 +159,21 @@ class IntelliJWorkflowUi(
             dialogTitle("② 운영 바로 반영 ($taskBranch → $developBranch)")
         }
         val commitDesc = if (developBranch.contains(" + ")) "최대 ${commitCount}개" else "${commitCount}개"
+        val previewLines = aheadCommits.take(5).map { "• $it" }.toMutableList()
+        if (aheadCommits.size > 5) {
+            previewLines.add("... 외 ${aheadCommits.size - 5}건")
+        }
+        val message = buildString {
+            append("'$taskBranch'의 ${commitDesc} 커밋을 '$developBranch'에 어떻게 반영할까요?")
+            if (previewLines.isNotEmpty()) {
+                append("\n\n")
+                append(previewLines.joinToString("\n"))
+            }
+        }
         return runOnEdtAndGet {
             val choiceIndex = Messages.showDialog(
                 project,
-                "'$taskBranch'의 ${commitDesc} 커밋을 '$developBranch'에 어떻게 반영할까요?",
+                message,
                 title,
                 arrayOf("병합 + 푸시 + 브랜치 삭제", "병합 + 푸시 (브랜치 유지)", "취소"),
                 0,
@@ -323,6 +352,40 @@ class IntelliJWorkflowUi(
 
     override fun setPendingConflict(context: PendingConflictContext?) {
         project.service<PendingConflictStateService>().set(repoRoot, context)
+    }
+
+    override fun promptSelectBranchesToDelete(branches: List<String>): List<String>? {
+        return runOnEdtAndGet {
+            val checkList = CheckBoxList<String>()
+            branches.forEach { branch ->
+                checkList.addItem(branch, branch, true)
+            }
+            val dialog = object : DialogWrapper(project) {
+                init {
+                    title = dialogTitle("완료된 작업 브랜치 일괄 정리")
+                    setOKButtonText("선택 브랜치 삭제")
+                    setCancelButtonText("취소")
+                    init()
+                }
+
+                override fun createCenterPanel(): javax.swing.JComponent {
+                    val panel = javax.swing.JPanel(java.awt.BorderLayout(0, 8))
+                    panel.add(
+                        javax.swing.JLabel("이미 병합 완료된 작업 브랜치만 표시됩니다. 삭제할 브랜치를 선택하세요."),
+                        java.awt.BorderLayout.NORTH,
+                    )
+                    val scrollPane = JBScrollPane(checkList)
+                    scrollPane.preferredSize = java.awt.Dimension(420, 220)
+                    panel.add(scrollPane, java.awt.BorderLayout.CENTER)
+                    return panel
+                }
+            }
+            if (!dialog.showAndGet()) {
+                null
+            } else {
+                branches.filterIndexed { index, _ -> checkList.isItemSelected(index) }
+            }
+        }
     }
 
     fun confirmCompleteResolvedMerge(): Boolean {

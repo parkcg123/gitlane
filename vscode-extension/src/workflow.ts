@@ -1,4 +1,4 @@
-import { FlowConfig, getTaskBaseBranch } from './config';
+import { DEFAULT_FLOW_CONFIG, FlowConfig, getTaskBaseBranch } from './config';
 import { GitClient } from './git';
 import { buildTaskBranchName, formatLocalDate, isProtectedBranch, validateTaskName } from './naming';
 
@@ -26,6 +26,7 @@ export interface WorkflowResult {
 export interface WorkflowUI {
   promptTaskName(datePrefix: string): Promise<string | undefined>;
   confirmDirtyStart(): Promise<'stash' | 'cancel'>;
+  confirmPopStash(taskBranch: string): Promise<boolean>;
   confirmExistingBranch(branchName: string): Promise<'checkout' | 'cancel'>;
   promptMergeTarget(
     taskBranch: string,
@@ -35,7 +36,8 @@ export interface WorkflowUI {
   confirmMergeToDevelop(
     taskBranch: string,
     developBranch: string,
-    commitCount: number
+    commitCount: number,
+    aheadCommits: string[]
   ): Promise<'delete' | 'keep' | 'cancel'>;
   confirmDeleteAlreadyMergedBranch(taskBranch: string, targetSummary: string): Promise<boolean>;
   confirmDeleteTaskBranch(
@@ -43,6 +45,7 @@ export interface WorkflowUI {
     unmergedCommitCount: number,
     returnBranch: string
   ): Promise<boolean>;
+  promptSelectBranchesToDelete(branches: string[]): Promise<string[] | undefined>;
   confirmReleaseToMaster(
     developBranch: string,
     masterBranch: string,
@@ -99,13 +102,33 @@ export class WorkflowService {
     await this.git.checkout(branch);
 
     if (hasRemote && (await this.git.branchExistsRemote(this.config.remote, branch))) {
-      await this.git.pullFastForwardOnly(this.config.remote, branch);
+      try {
+        await this.git.pullFastForwardOnly(this.config.remote, branch);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        if (/fast-forward|diverg/i.test(detail)) {
+          throw new Error(
+            `로컬 '${branch}' 브랜치가 원격('${this.config.remote}/${branch}')과 분기되어 자동 최신화(--ff-only)할 수 없습니다. 로컬 변경을 정리하거나 수동으로 동기화한 뒤 다시 시도해 주세요.`
+          );
+        }
+        throw err;
+      }
     }
   }
 
   private async pushIfRemoteExists(branch: string): Promise<boolean> {
     if (await this.git.hasRemote(this.config.remote)) {
-      await this.git.push(this.config.remote, branch);
+      try {
+        await this.git.push(this.config.remote, branch);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        if (/non-fast-forward|fetch first|rejected/i.test(detail)) {
+          throw new Error(
+            `로컬 '${branch}' 병합은 완료되었으나 원격('${this.config.remote}/${branch}')에 다른 팀원의 새 커밋이 있어 푸시가 거절되었습니다. '${branch}'에서 최신 원격을 Pull(동기화)한 뒤 다시 푸시해 주세요.`
+          );
+        }
+        throw err;
+      }
       return true;
     }
     return false;
@@ -173,12 +196,14 @@ export class WorkflowService {
       return blocked;
     }
 
+    let stashed = false;
     if (await this.git.hasUncommittedChanges()) {
       const dirtyChoice = await this.ui.confirmDirtyStart();
       if (dirtyChoice === 'cancel') {
         return { status: 'cancelled', message: '작업 시작을 취소했습니다.' };
       }
       await this.git.stashPush('gitlane: auto-stash before startTask');
+      stashed = true;
     }
 
     const baseBranch = getTaskBaseBranch(this.config);
@@ -207,6 +232,23 @@ export class WorkflowService {
 
     const taskBranch = buildTaskBranchName(rawName, this.config, now);
 
+    const tryPopStash = async (): Promise<void> => {
+      if (!stashed) {
+        return;
+      }
+      if (!(await this.ui.confirmPopStash(taskBranch))) {
+        return;
+      }
+      try {
+        await this.git.stashPop();
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        await this.ui.showWarning(
+          `임시 저장(Stash) 복원 중 충돌 또는 오류가 발생했습니다. Stash 목록에서 수동으로 확인해 주세요: ${detail}`
+        );
+      }
+    };
+
     if (await this.git.branchExistsLocal(taskBranch)) {
       const existingChoice = await this.ui.confirmExistingBranch(taskBranch);
       if (existingChoice === 'cancel') {
@@ -216,12 +258,14 @@ export class WorkflowService {
         return { status: 'cancelled', message: '작업 시작을 취소했습니다.' };
       }
       await this.git.checkout(taskBranch);
+      await tryPopStash();
       const msg = `기존 작업 브랜치 '${taskBranch}'로 이동했습니다.`;
       await this.ui.showInfo(msg);
       return { status: 'success', branch: taskBranch, message: msg };
     }
 
     await this.git.checkoutNewBranch(taskBranch);
+    await tryPopStash();
     const msg = `새 작업 브랜치 '${taskBranch}'를 '${baseBranch}'에서 생성했습니다.`;
     await this.ui.showInfo(msg);
     return { status: 'success', branch: taskBranch, message: msg };
@@ -371,14 +415,14 @@ export class WorkflowService {
       selectedTargets = [this.config.masterBranch];
     }
 
-    const targetCounts: Array<{ branch: string; count: number }> = [];
+    const targetCounts: Array<{ branch: string; commits: string[] }> = [];
     for (const target of selectedTargets) {
       await this.syncBranch(target);
       const aheadCommits = await this.git.getAheadCommits(target, taskBranch);
-      targetCounts.push({ branch: target, count: aheadCommits.length });
+      targetCounts.push({ branch: target, commits: aheadCommits });
     }
 
-    const effectiveTargets = targetCounts.filter((item) => item.count > 0);
+    const effectiveTargets = targetCounts.filter((item) => item.commits.length > 0);
     if (effectiveTargets.length === 0) {
       const targetSummary = selectedTargets.join(' + ');
       const shouldDelete = await this.ui.confirmDeleteAlreadyMergedBranch(taskBranch, targetSummary);
@@ -403,11 +447,18 @@ export class WorkflowService {
     }
 
     const effectiveBranches = effectiveTargets.map((item) => item.branch);
-    const maxCommitCount = Math.max(...effectiveTargets.map((item) => item.count));
+    let previewTarget = effectiveTargets[0];
+    for (const item of effectiveTargets) {
+      if (item.commits.length > previewTarget.commits.length) {
+        previewTarget = item;
+      }
+    }
+    const maxCommitCount = previewTarget.commits.length;
     const choice = await this.ui.confirmMergeToDevelop(
       taskBranch,
       effectiveBranches.join(' + '),
-      maxCommitCount
+      maxCommitCount,
+      previewTarget.commits
     );
 
     if (choice === 'cancel') {
@@ -721,4 +772,113 @@ export class WorkflowService {
 
     return this.executeAbort(ctx);
   }
+
+  /**
+   * Bulk Cleanup: Find all non-current, non-protected local branches already merged into develop/master and delete selected ones.
+   */
+  async cleanupMergedBranches(): Promise<WorkflowResult> {
+    const blocked = await this.checkInProgressState();
+    if (blocked) {
+      return blocked;
+    }
+
+    const currentBranch = await this.git.getCurrentBranch();
+    const localBranches = await this.git.listLocalBranches();
+
+    const candidateBases = this.config.useDevelopBranch
+      ? [this.config.developBranch, this.config.masterBranch]
+      : [this.config.masterBranch];
+
+    const existingBases: string[] = [];
+    for (const base of candidateBases) {
+      if (await this.git.branchExistsLocal(base)) {
+        existingBases.push(base);
+      }
+    }
+
+    if (existingBases.length === 0) {
+      const msg = '기준 보호 브랜치를 로컬에서 찾을 수 없어 완료된 브랜치를 판별할 수 없습니다.';
+      await this.ui.showInfo(msg);
+      return { status: 'noop', message: msg };
+    }
+
+    const mergedCandidates: string[] = [];
+    for (const branch of localBranches) {
+      if (branch === currentBranch || isProtectedBranch(branch, this.config)) {
+        continue;
+      }
+      let isMerged = false;
+      for (const base of existingBases) {
+        const ahead = await this.git.getAheadCommits(base, branch);
+        if (ahead.length === 0) {
+          isMerged = true;
+          break;
+        }
+      }
+      if (isMerged) {
+        mergedCandidates.push(branch);
+      }
+    }
+
+    if (mergedCandidates.length === 0) {
+      const msg = '정리할 완료된 작업 브랜치가 없습니다.';
+      await this.ui.showInfo(msg);
+      return { status: 'noop', message: msg };
+    }
+
+    const selected = await this.ui.promptSelectBranchesToDelete(mergedCandidates);
+    if (!selected || selected.length === 0) {
+      return { status: 'cancelled', message: '브랜치 정리를 취소했습니다.' };
+    }
+
+    const deleted: string[] = [];
+    const failed: string[] = [];
+    for (const branch of selected) {
+      try {
+        await this.cleanupTaskBranch(branch, false);
+        deleted.push(branch);
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        failed.push(`${branch} (${detail})`);
+      }
+    }
+
+    if (failed.length > 0) {
+      const msg = `완료된 작업 브랜치 ${deleted.length}개 정리, ${failed.length}개 실패: ${failed.join(', ')}`;
+      await this.ui.showWarning(msg);
+      return { status: deleted.length > 0 ? 'success' : 'blocked', message: msg };
+    }
+
+    const msg = `완료된 작업 브랜치 ${deleted.length}개를 정리했습니다.`;
+    await this.ui.showInfo(msg);
+    return { status: 'success', message: msg };
+  }
+}
+
+export async function detectRecommendedConfig(
+  git: GitClient,
+  remote = DEFAULT_FLOW_CONFIG.remote
+): Promise<FlowConfig> {
+  const hasRemote = await git.hasRemote(remote);
+  const branchExists = async (name: string): Promise<boolean> => {
+    if (await git.branchExistsLocal(name)) {
+      return true;
+    }
+    return hasRemote ? git.branchExistsRemote(remote, name) : false;
+  };
+
+  const [hasDevelop, hasMaster, hasMain] = await Promise.all([
+    branchExists('develop'),
+    branchExists('master'),
+    branchExists('main'),
+  ]);
+
+  const masterBranch = hasMaster ? 'master' : hasMain ? 'main' : 'master';
+  return {
+    ...DEFAULT_FLOW_CONFIG,
+    useDevelopBranch: hasDevelop,
+    developBranch: 'develop',
+    masterBranch,
+    remote,
+  };
 }

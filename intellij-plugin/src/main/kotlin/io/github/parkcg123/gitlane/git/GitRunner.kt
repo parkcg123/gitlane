@@ -84,6 +84,14 @@ class GitRunner(private val repoRoot: Path) {
         return null
     }
 
+    fun listLocalBranches(): List<String> {
+        return runOrThrow("for-each-ref", "--format=%(refname:short)", "refs/heads/")
+            .stdout
+            .lines()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+    }
+
     fun isMergeInProgress(): Boolean {
         return runRaw("rev-parse", "--verify", "-q", "MERGE_HEAD").exitCode == 0
     }
@@ -149,6 +157,10 @@ class GitRunner(private val repoRoot: Path) {
 
     fun stashPush(message: String) {
         runOrThrow("stash", "push", "-u", "-m", message)
+    }
+
+    fun stashPop() {
+        runOrThrow("stash", "pop")
     }
 
     fun merge(branch: String, noFastForward: Boolean): MergeOutcome {

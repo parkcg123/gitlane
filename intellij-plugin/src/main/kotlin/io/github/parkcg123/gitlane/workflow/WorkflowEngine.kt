@@ -2,6 +2,7 @@ package io.github.parkcg123.gitlane.workflow
 
 import io.github.parkcg123.gitlane.config.FlowConfig
 import io.github.parkcg123.gitlane.git.GitRunner
+import io.github.parkcg123.gitlane.git.GitRunnerException
 import io.github.parkcg123.gitlane.naming.BranchNamer
 import java.time.LocalDate
 
@@ -42,11 +43,18 @@ data class WorkflowResult(
 interface WorkflowUi {
     fun promptTaskName(datePrefix: String): String?
     fun confirmDirtyStart(): Boolean
+    fun confirmPopStash(taskBranch: String): Boolean
     fun confirmExistingBranch(branchName: String): Boolean
     fun promptMergeTarget(taskBranch: String, developBranch: String, masterBranch: String): MergeTargetChoice
-    fun confirmMergeToDevelop(taskBranch: String, developBranch: String, commitCount: Int): MergeToDevelopChoice
+    fun confirmMergeToDevelop(
+        taskBranch: String,
+        developBranch: String,
+        commitCount: Int,
+        aheadCommits: List<String>,
+    ): MergeToDevelopChoice
     fun confirmDeleteAlreadyMergedBranch(taskBranch: String, targetSummary: String): Boolean
     fun confirmDeleteTaskBranch(taskBranch: String, unmergedCommitCount: Int, returnBranch: String): Boolean
+    fun promptSelectBranchesToDelete(branches: List<String>): List<String>?
     fun confirmReleaseToMaster(developBranch: String, masterBranch: String, aheadCommits: List<String>): Boolean
     fun confirmAbortMerge(targetBranch: String): Boolean
     fun promptConflictAction(context: PendingConflictContext, conflictedFiles: List<String>): ConflictPromptChoice
@@ -92,13 +100,38 @@ class WorkflowEngine(
         git.checkout(branch)
 
         if (hasRemote && git.branchExistsRemote(config.remote, branch)) {
-            git.pullFastForwardOnly(config.remote, branch)
+            try {
+                git.pullFastForwardOnly(config.remote, branch)
+            } catch (e: GitRunnerException) {
+                val detail = e.message.orEmpty()
+                if (detail.contains("fast-forward", ignoreCase = true) || detail.contains("diverg", ignoreCase = true)) {
+                    throw IllegalStateException(
+                        "로컬 '$branch' 브랜치가 원격('${config.remote}/$branch')과 분기되어 자동 최신화(--ff-only)할 수 없습니다. 로컬 변경을 정리하거나 수동으로 동기화한 뒤 다시 시도해 주세요.",
+                        e,
+                    )
+                }
+                throw e
+            }
         }
     }
 
     private fun pushIfRemoteExists(branch: String): Boolean {
         if (git.hasRemote(config.remote)) {
-            git.push(config.remote, branch)
+            try {
+                git.push(config.remote, branch)
+            } catch (e: GitRunnerException) {
+                val detail = e.message.orEmpty()
+                if (detail.contains("non-fast-forward", ignoreCase = true) ||
+                    detail.contains("fetch first", ignoreCase = true) ||
+                    detail.contains("rejected", ignoreCase = true)
+                ) {
+                    throw IllegalStateException(
+                        "로컬 '$branch' 병합은 완료되었으나 원격('${config.remote}/$branch')에 다른 팀원의 새 커밋이 있어 푸시가 거절되었습니다. '$branch'에서 최신 원격을 Pull(동기화)한 뒤 다시 푸시해 주세요.",
+                        e,
+                    )
+                }
+                throw e
+            }
             return true
         }
         return false
@@ -161,11 +194,13 @@ class WorkflowEngine(
     fun startTask(): WorkflowResult {
         checkInProgressState()?.let { return it }
 
+        var stashed = false
         if (git.hasUncommittedChanges()) {
             if (!ui.confirmDirtyStart()) {
                 return WorkflowResult(WorkflowStatus.CANCELLED, "작업 시작을 취소했습니다.")
             }
             git.stashPush("gitlane: auto-stash before startTask")
+            stashed = true
         }
 
         val baseBranch = config.taskBaseBranch()
@@ -195,6 +230,18 @@ class WorkflowEngine(
 
         val taskBranch = BranchNamer.buildTaskBranchName(rawName, config, today)
 
+        fun tryPopStash() {
+            if (!stashed || !ui.confirmPopStash(taskBranch)) {
+                return
+            }
+            try {
+                git.stashPop()
+            } catch (e: Exception) {
+                val detail = e.message ?: e::class.java.simpleName
+                ui.showWarning("임시 저장(Stash) 복원 중 충돌 또는 오류가 발생했습니다. Stash 목록에서 수동으로 확인해 주세요: $detail")
+            }
+        }
+
         if (git.branchExistsLocal(taskBranch)) {
             if (!ui.confirmExistingBranch(taskBranch)) {
                 if (originalBranch != null && originalBranch != baseBranch) {
@@ -203,12 +250,14 @@ class WorkflowEngine(
                 return WorkflowResult(WorkflowStatus.CANCELLED, "작업 시작을 취소했습니다.")
             }
             git.checkout(taskBranch)
+            tryPopStash()
             val msg = "기존 작업 브랜치 '${taskBranch}'로 이동했습니다."
             ui.showInfo(msg)
             return WorkflowResult(WorkflowStatus.SUCCESS, msg, branch = taskBranch)
         }
 
         git.checkoutNewBranch(taskBranch)
+        tryPopStash()
         val msg = "새 작업 브랜치 '${taskBranch}'를 '${baseBranch}'에서 생성했습니다."
         ui.showInfo(msg)
         return WorkflowResult(WorkflowStatus.SUCCESS, msg, branch = taskBranch)
@@ -352,10 +401,10 @@ class WorkflowEngine(
 
         val targetCounts = selectedTargets.map { target ->
             syncBranch(target)
-            target to git.getAheadCommits(target, taskBranch).size
+            target to git.getAheadCommits(target, taskBranch)
         }
 
-        val effectiveTargets = targetCounts.filter { it.second > 0 }
+        val effectiveTargets = targetCounts.filter { it.second.isNotEmpty() }
         if (effectiveTargets.isEmpty()) {
             val targetSummary = selectedTargets.joinToString(" + ")
             if (ui.confirmDeleteAlreadyMergedBranch(taskBranch, targetSummary)) {
@@ -380,8 +429,14 @@ class WorkflowEngine(
         }
 
         val effectiveBranches = effectiveTargets.map { it.first }
-        val maxCommitCount = effectiveTargets.maxOf { it.second }
-        val choice = ui.confirmMergeToDevelop(taskBranch, effectiveBranches.joinToString(" + "), maxCommitCount)
+        val previewTarget = effectiveTargets.maxBy { it.second.size }
+        val maxCommitCount = previewTarget.second.size
+        val choice = ui.confirmMergeToDevelop(
+            taskBranch,
+            effectiveBranches.joinToString(" + "),
+            maxCommitCount,
+            previewTarget.second,
+        )
         if (choice == MergeToDevelopChoice.CANCEL) {
             git.checkout(taskBranch)
             return WorkflowResult(WorkflowStatus.CANCELLED, "${actionLabel}을 취소했습니다.", branch = taskBranch)
@@ -671,5 +726,90 @@ class WorkflowEngine(
         }
 
         return executeAbort(ctx)
+    }
+
+    /**
+     * Bulk Cleanup: Find all non-current, non-protected local branches already merged into develop/master and delete selected ones.
+     */
+    fun cleanupMergedBranches(): WorkflowResult {
+        checkInProgressState()?.let { return it }
+
+        val currentBranch = git.getCurrentBranch()
+        val localBranches = git.listLocalBranches()
+        val candidateBases = if (config.useDevelopBranch) {
+            listOf(config.developBranch, config.masterBranch)
+        } else {
+            listOf(config.masterBranch)
+        }
+        val existingBases = candidateBases.filter { git.branchExistsLocal(it) }
+        if (existingBases.isEmpty()) {
+            val msg = "기준 보호 브랜치를 로컬에서 찾을 수 없어 완료된 브랜치를 판별할 수 없습니다."
+            ui.showInfo(msg)
+            return WorkflowResult(WorkflowStatus.NOOP, msg)
+        }
+
+        val mergedCandidates = localBranches.filter { branch ->
+            branch != currentBranch &&
+                !BranchNamer.isProtectedBranch(branch, config) &&
+                existingBases.any { base -> git.getAheadCommits(base, branch).isEmpty() }
+        }
+
+        if (mergedCandidates.isEmpty()) {
+            val msg = "정리할 완료된 작업 브랜치가 없습니다."
+            ui.showInfo(msg)
+            return WorkflowResult(WorkflowStatus.NOOP, msg)
+        }
+
+        val selected = ui.promptSelectBranchesToDelete(mergedCandidates)
+        if (selected.isNullOrEmpty()) {
+            return WorkflowResult(WorkflowStatus.CANCELLED, "브랜치 정리를 취소했습니다.")
+        }
+
+        val deleted = mutableListOf<String>()
+        val failed = mutableListOf<String>()
+        for (branch in selected) {
+            try {
+                cleanupTaskBranch(branch, force = false)
+                deleted.add(branch)
+            } catch (e: Exception) {
+                failed.add("$branch (${e.message ?: e::class.java.simpleName})")
+            }
+        }
+
+        if (failed.isNotEmpty()) {
+            val msg = "완료된 작업 브랜치 ${deleted.size}개 정리, ${failed.size}개 실패: ${failed.joinToString(", ")}"
+            ui.showWarning(msg)
+            return WorkflowResult(
+                if (deleted.isNotEmpty()) WorkflowStatus.SUCCESS else WorkflowStatus.BLOCKED,
+                msg,
+            )
+        }
+
+        val msg = "완료된 작업 브랜치 ${deleted.size}개를 정리했습니다."
+        ui.showInfo(msg)
+        return WorkflowResult(WorkflowStatus.SUCCESS, msg)
+    }
+
+    companion object {
+        fun detectRecommendedConfig(git: GitRunner, remote: String = "origin"): FlowConfig {
+            val hasRemote = git.hasRemote(remote)
+            fun branchExists(name: String): Boolean =
+                git.branchExistsLocal(name) || (hasRemote && git.branchExistsRemote(remote, name))
+
+            val hasDevelop = branchExists("develop")
+            val hasMaster = branchExists("master")
+            val hasMain = branchExists("main")
+            val masterBranch = when {
+                hasMaster -> "master"
+                hasMain -> "main"
+                else -> "master"
+            }
+            return FlowConfig(
+                useDevelopBranch = hasDevelop,
+                developBranch = "develop",
+                masterBranch = masterBranch,
+                remote = remote,
+            )
+        }
     }
 }

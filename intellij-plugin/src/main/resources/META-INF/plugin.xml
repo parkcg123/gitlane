@@ -12,16 +12,19 @@
             <code>.gitlane.json</code> repository configuration.
         </p>
         <ul>
-            <li><b>① Start Task</b>: Fast-forwards <code>develop</code> and creates a local-date <code>YYYYMMDD_task</code> branch with dirty-tree auto-stash protection.</li>
-            <li><b>② Merge to develop</b>: Verifies clean working tree and non-protected branch, merges with <code>--no-ff</code>, pushes, and optionally deletes the task branch.</li>
+            <li><b>① Start Task</b>: Fast-forwards <code>develop</code> (or <code>master</code>), creates a local-date <code>YYYYMMDD_task</code> branch with dirty-tree auto-stash and optional <code>stash pop</code> restore.</li>
+            <li><b>② Merge Task</b>: Verifies clean working tree and task branch, lets you target <code>develop</code>, <code>master</code>, or both, merges with <code>--no-ff</code>, pushes, and deletes or keeps the task branch.</li>
+            <li><b>Delete Task Branch</b>: Safely deletes merged branches (<code>-d</code>) or warns before force-deleting (<code>-D</code>) unmerged branches; merge and delete actions are hidden outside task branches.</li>
             <li><b>③ Release to master</b>: Previews ahead commits before merging <code>develop</code> into <code>master</code>, pushes, and returns to <code>develop</code>.</li>
-            <li><b>Conflict Guardrails</b>: Pauses safely on merge conflicts, opens IntelliJ's native 3-Way Merge dialog, and provides one-click completion or abort recovery.</li>
+            <li><b>Multi-Repository Support</b>: Automatically discovers multi-root workspaces, nested repositories, and submodules/worktrees with a unified Status Bar and single-screen grouped menu.</li>
+            <li><b>Conflict Guardrails</b>: Pauses safely on merge conflicts, opens IntelliJ's native 3-Way Merge dialog, and provides one-click completion (including multi-target continuation) or abort recovery.</li>
         </ul>
         <p>팀 공용 초간단 Git 워크플로우 (develop → YYYYMMDD_작업명 → develop → master) 플러그인입니다.</p>
     ]]></description>
 
     <change-notes><![CDATA[
         <ul>
+            <li><b>0.5.0</b>: Added <code>.gitlane.json</code> auto-detect wizard, native <b>Settings → Tools → GitLane</b> UI, bulk cleanup of already-merged task branches, commit preview in <code>② Merge Task</code>, optional <code>stash pop</code> restore on task start, and friendly recovery guidance for <code>--ff-only</code> divergence and rejected pushes.</li>
             <li><b>0.4.0</b>: Added multi-repository discovery (multi-root, nested repos, submodules/worktrees), a unified status bar with conflict priority and full multi-repo tooltip, and a single-screen separator-grouped per-repository menu.</li>
             <li><b>0.3.0</b>: Added merge target selection (<code>develop</code>, <code>master</code>, or both), standalone task branch deletion (with safe vs. unmerged warning), cleanup prompt when already merged, and hiding task-branch merge/delete actions outside task branches.</li>
             <li><b>0.2.1</b>: Show conflict resolution actions (3-Way Merge, Complete Merge, Abort Merge) only while a merge conflict is in progress, keeping the GitLane menu clean during normal work.</li>
@@ -41,6 +44,11 @@
         <notificationGroup
                 id="GitLane"
                 displayType="BALLOON"/>
+        <projectConfigurable
+                parentId="tools"
+                id="io.github.parkcg123.gitlane.settings"
+                displayName="GitLane"
+                instance="io.github.parkcg123.gitlane.ui.GitLaneConfigurable"/>
     </extensions>
 
     <actions>
@@ -78,6 +86,16 @@
                 class="io.github.parkcg123.gitlane.actions.AbortMergeAction"
                 text="머지 취소 (원복)"
                 description="진행 중인 병합을 중단하고 원래 브랜치로 복구합니다."/>
+
+        <action id="GitLane.CleanupMergedBranches"
+                class="io.github.parkcg123.gitlane.actions.CleanupMergedBranchesAction"
+                text="완료된 작업 브랜치 정리"
+                description="이미 병합 완료된 로컬 작업 브랜치를 선택해 일괄 삭제합니다."/>
+
+        <action id="GitLane.InitConfig"
+                class="io.github.parkcg123.gitlane.actions.InitConfigAction"
+                text="설정 (.gitlane.json)"
+                description="저장소의 .gitlane.json 설정 파일을 생성하거나 엽니다."/>
 
         <group id="GitLane.ActionGroup"
                class="io.github.parkcg123.gitlane.actions.GitLaneActionGroup"

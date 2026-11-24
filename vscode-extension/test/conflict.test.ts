@@ -83,6 +83,9 @@ class MockConflictUI implements WorkflowUI {
   async confirmDirtyStart(): Promise<'stash' | 'cancel'> {
     return 'stash';
   }
+  async confirmPopStash(): Promise<boolean> {
+    return false;
+  }
   async confirmExistingBranch(): Promise<'checkout' | 'cancel'> {
     return 'checkout';
   }
@@ -97,6 +100,9 @@ class MockConflictUI implements WorkflowUI {
   }
   async confirmDeleteTaskBranch(): Promise<boolean> {
     return true;
+  }
+  async promptSelectBranchesToDelete(branches: string[]): Promise<string[] | undefined> {
+    return branches;
   }
   async confirmReleaseToMaster(): Promise<'release' | 'cancel'> {
     return 'release';

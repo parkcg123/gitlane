@@ -24,11 +24,13 @@ class WorkflowEngineTest {
     private class ScriptedUi(
         var taskName: String? = "login_fix",
         var dirtyStart: Boolean = false,
+        var popStash: Boolean = false,
         var existingBranch: Boolean = false,
         var mergeTargetChoice: MergeTargetChoice = MergeTargetChoice.DEVELOP,
         var mergeChoice: MergeToDevelopChoice = MergeToDevelopChoice.DELETE,
         var deleteAlreadyMerged: Boolean = false,
         var deleteTaskConfirm: Boolean = true,
+        var selectedBranchesToDelete: ((List<String>) -> List<String>?) = { it },
         var releaseConfirm: Boolean = true,
         var abortConfirm: Boolean = true,
         var conflictAction: ConflictPromptChoice = ConflictPromptChoice.LATER,
@@ -41,6 +43,7 @@ class WorkflowEngineTest {
 
         override fun promptTaskName(datePrefix: String): String? = taskName
         override fun confirmDirtyStart(): Boolean = dirtyStart
+        override fun confirmPopStash(taskBranch: String): Boolean = popStash
         override fun confirmExistingBranch(branchName: String): Boolean = existingBranch
         override fun promptMergeTarget(
             taskBranch: String,
@@ -52,6 +55,7 @@ class WorkflowEngineTest {
             taskBranch: String,
             developBranch: String,
             commitCount: Int,
+            aheadCommits: List<String>,
         ): MergeToDevelopChoice = mergeChoice
 
         override fun confirmDeleteAlreadyMergedBranch(
@@ -64,6 +68,9 @@ class WorkflowEngineTest {
             unmergedCommitCount: Int,
             returnBranch: String,
         ): Boolean = deleteTaskConfirm
+
+        override fun promptSelectBranchesToDelete(branches: List<String>): List<String>? =
+            selectedBranchesToDelete(branches)
 
         override fun confirmReleaseToMaster(
             developBranch: String,
@@ -615,5 +622,111 @@ class WorkflowEngineTest {
         assertEquals(WorkflowStatus.SUCCESS, deletedMerged.status)
         assertEquals("develop", git.getCurrentBranch())
         assertFalse(git.branchExistsLocal("20261119_merged_safe_delete"))
+    }
+
+    @Test
+    fun `startTask can pop auto-stashed edits onto the newly created task branch`(@TempDir root: Path) {
+        val fixture = createFixture(root)
+        Files.writeString(fixture.work.resolve("app.txt"), "dirty edit to pop\n")
+
+        val git = GitRunner(fixture.work)
+        val ui = ScriptedUi(taskName = "pop_stash_task", dirtyStart = true, popStash = true)
+        val engine = WorkflowEngine(git, ui, FlowConfig()) { fixedDate }
+
+        val started = engine.startTask()
+        assertEquals(WorkflowStatus.SUCCESS, started.status)
+        assertEquals("20261119_pop_stash_task", git.getCurrentBranch())
+        assertEquals("dirty edit to pop\n", Files.readString(fixture.work.resolve("app.txt")))
+    }
+
+    @Test
+    fun `cleanupMergedBranches deletes only merged non-current non-protected branches`(@TempDir root: Path) {
+        val fixture = createFixture(root)
+        val git = GitRunner(fixture.work)
+        val ui = ScriptedUi(
+            taskName = "merged_done",
+            mergeTargetChoice = MergeTargetChoice.DEVELOP,
+            mergeChoice = MergeToDevelopChoice.KEEP,
+        )
+        val engine = WorkflowEngine(git, ui, FlowConfig()) { fixedDate }
+
+        engine.startTask()
+        Files.writeString(fixture.work.resolve("a.txt"), "a\n")
+        runGit(fixture.work, "add", "a.txt")
+        runGit(fixture.work, "commit", "-m", "feat: a")
+        engine.mergeToDevelop()
+
+        ui.taskName = "wip_unmerged"
+        engine.startTask()
+        Files.writeString(fixture.work.resolve("b.txt"), "b\n")
+        runGit(fixture.work, "add", "b.txt")
+        runGit(fixture.work, "commit", "-m", "wip: b")
+
+        git.ensureLocalBranch("master", "origin")
+        git.checkout("develop")
+
+        var offered: List<String> = emptyList()
+        ui.selectedBranchesToDelete = { branches ->
+            offered = branches
+            branches
+        }
+
+        val res = engine.cleanupMergedBranches()
+        assertEquals(WorkflowStatus.SUCCESS, res.status)
+        assertEquals(listOf("20261119_merged_done"), offered)
+        assertFalse(git.branchExistsLocal("20261119_merged_done"))
+        assertTrue(git.branchExistsLocal("20261119_wip_unmerged"))
+        assertTrue(git.branchExistsLocal("develop"))
+        assertTrue(git.branchExistsLocal("master"))
+    }
+
+    @Test
+    fun `detectRecommendedConfig detects develop+master and main-only repositories`(@TempDir root: Path) {
+        val fixture = createFixture(root)
+        val recDevelop = WorkflowEngine.detectRecommendedConfig(GitRunner(fixture.work))
+        assertTrue(recDevelop.useDevelopBranch)
+        assertEquals("master", recDevelop.masterBranch)
+
+        val mainOnlyDir = root.resolve("main-only")
+        Files.createDirectories(mainOnlyDir)
+        runGit(mainOnlyDir, "init")
+        runGit(mainOnlyDir, "config", "user.name", "Test")
+        runGit(mainOnlyDir, "config", "user.email", "test@example.com")
+        runGit(mainOnlyDir, "checkout", "-b", "main")
+        Files.writeString(mainOnlyDir.resolve("README.md"), "# hi\n")
+        runGit(mainOnlyDir, "add", ".")
+        runGit(mainOnlyDir, "commit", "-m", "init")
+
+        val recMain = WorkflowEngine.detectRecommendedConfig(GitRunner(mainOnlyDir))
+        assertFalse(recMain.useDevelopBranch)
+        assertEquals("main", recMain.masterBranch)
+    }
+
+    @Test
+    fun `push rejected due to non-fast-forward shows friendly recovery message and keeps task branch`(@TempDir root: Path) {
+        val fixture = createFixture(root)
+        val git = GitRunner(fixture.work)
+        val ui = ScriptedUi(taskName = "push_reject", mergeTargetChoice = MergeTargetChoice.DEVELOP)
+        val engine = WorkflowEngine(git, ui, FlowConfig()) { fixedDate }
+
+        engine.startTask()
+        Files.writeString(fixture.work.resolve("task.txt"), "task\n")
+        runGit(fixture.work, "add", "task.txt")
+        runGit(fixture.work, "commit", "-m", "feat: task")
+
+        // Install a pre-receive hook on bare origin to reject pushes with non-fast-forward message
+        val hookFile = fixture.origin.resolve("hooks/pre-receive")
+        Files.writeString(
+            hookFile,
+            "#!/bin/sh\necho '! [rejected] develop -> develop (non-fast-forward)' >&2\nexit 1\n",
+        )
+        hookFile.toFile().setExecutable(true)
+
+        val ex = org.junit.jupiter.api.Assertions.assertThrows(IllegalStateException::class.java) {
+            engine.mergeToDevelop()
+        }
+        assertTrue(ex.message.orEmpty().contains("푸시가 거절되었습니다"))
+        assertTrue(ex.message.orEmpty().contains("Pull(동기화)"))
+        assertTrue(git.branchExistsLocal("20261119_push_reject"))
     }
 }

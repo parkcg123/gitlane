@@ -7,6 +7,7 @@ import { afterEach, describe, it } from 'node:test';
 import { DEFAULT_FLOW_CONFIG, FlowConfig } from '../src/config';
 import { GitClient } from '../src/git';
 import {
+  detectRecommendedConfig,
   MergeTargetChoice,
   PendingConflictContext,
   WorkflowService,
@@ -74,11 +75,14 @@ class MockWorkflowUI implements WorkflowUI {
 
   onPromptTaskName: (datePrefix: string) => string | undefined = () => 'login_fix';
   onConfirmDirtyStart: () => 'stash' | 'cancel' = () => 'stash';
+  onConfirmPopStash: () => boolean = () => false;
   onConfirmExistingBranch: () => 'checkout' | 'cancel' = () => 'checkout';
   onPromptMergeTarget: () => MergeTargetChoice = () => 'develop';
   onConfirmMergeToDevelop: () => 'delete' | 'keep' | 'cancel' = () => 'delete';
   onConfirmDeleteAlreadyMergedBranch: () => boolean = () => false;
   onConfirmDeleteTaskBranch: () => boolean = () => true;
+  onPromptSelectBranchesToDelete: (branches: string[]) => string[] | undefined = (branches) =>
+    branches;
   onConfirmReleaseToMaster: () => 'release' | 'cancel' = () => 'release';
   onConfirmAbortMerge: () => boolean = () => true;
   onPromptConflictAction: () => 'open' | 'abort' | 'later' = () => 'open';
@@ -89,6 +93,10 @@ class MockWorkflowUI implements WorkflowUI {
 
   async confirmDirtyStart(): Promise<'stash' | 'cancel'> {
     return this.onConfirmDirtyStart();
+  }
+
+  async confirmPopStash(): Promise<boolean> {
+    return this.onConfirmPopStash();
   }
 
   async confirmExistingBranch(): Promise<'checkout' | 'cancel'> {
@@ -109,6 +117,10 @@ class MockWorkflowUI implements WorkflowUI {
 
   async confirmDeleteTaskBranch(): Promise<boolean> {
     return this.onConfirmDeleteTaskBranch();
+  }
+
+  async promptSelectBranchesToDelete(branches: string[]): Promise<string[] | undefined> {
+    return this.onPromptSelectBranchesToDelete(branches);
   }
 
   async confirmReleaseToMaster(): Promise<'release' | 'cancel'> {
@@ -613,5 +625,134 @@ describe('WorkflowService end-to-end git integration', () => {
     assert.equal(deletedMerged.status, 'success');
     assert.equal(await git.getCurrentBranch(), 'develop');
     assert.equal(await git.branchExistsLocal('20261119_merged_safe_delete'), false);
+  });
+
+  it('startTask can pop auto-stashed edits onto the newly created task branch', async () => {
+    const fixture = createRepoFixture();
+    tempRoots.push(fixture.rootDir);
+
+    const git = new GitClient(fixture.workDir);
+    const ui = new MockWorkflowUI();
+    const service = new WorkflowService(git, ui, DEFAULT_FLOW_CONFIG, FIXED_NOW);
+
+    fs.writeFileSync(path.join(fixture.workDir, 'app.txt'), 'dirty_to_pop\n', 'utf8');
+    ui.onPromptTaskName = () => 'pop_stash_task';
+    ui.onConfirmDirtyStart = () => 'stash';
+    ui.onConfirmPopStash = () => true;
+
+    const started = await service.startTask();
+    assert.equal(started.status, 'success');
+    assert.equal(await git.getCurrentBranch(), '20261119_pop_stash_task');
+    assert.equal(
+      fs.readFileSync(path.join(fixture.workDir, 'app.txt'), 'utf8'),
+      'dirty_to_pop\n'
+    );
+  });
+
+  it('cleanupMergedBranches deletes only merged non-current non-protected branches', async () => {
+    const fixture = createRepoFixture();
+    tempRoots.push(fixture.rootDir);
+
+    const git = new GitClient(fixture.workDir);
+    const ui = new MockWorkflowUI();
+    const service = new WorkflowService(git, ui, DEFAULT_FLOW_CONFIG, FIXED_NOW);
+
+    // 1. Create and merge branch A (kept)
+    ui.onPromptTaskName = () => 'merged_done';
+    await service.startTask();
+    fs.writeFileSync(path.join(fixture.workDir, 'a.txt'), 'a\n', 'utf8');
+    runGit(fixture.workDir, ['add', 'a.txt']);
+    runGit(fixture.workDir, ['commit', '-m', 'feat: a']);
+    ui.onPromptMergeTarget = () => 'develop';
+    ui.onConfirmMergeToDevelop = () => 'keep';
+    await service.mergeToDevelop();
+
+    // 2. Create unmerged branch B
+    ui.onPromptTaskName = () => 'wip_unmerged';
+    await service.startTask();
+    fs.writeFileSync(path.join(fixture.workDir, 'b.txt'), 'b\n', 'utf8');
+    runGit(fixture.workDir, ['add', 'b.txt']);
+    runGit(fixture.workDir, ['commit', '-m', 'wip: b']);
+
+    // Switch back to develop so currentBranch is protected
+    await git.checkout('develop');
+
+    let offeredCandidates: string[] = [];
+    ui.onPromptSelectBranchesToDelete = (branches) => {
+      offeredCandidates = branches;
+      return branches;
+    };
+
+    const res = await service.cleanupMergedBranches();
+    assert.equal(res.status, 'success');
+    assert.deepEqual(offeredCandidates, ['20261119_merged_done']);
+    assert.equal(await git.branchExistsLocal('20261119_merged_done'), false);
+    assert.equal(await git.branchExistsLocal('20261119_wip_unmerged'), true);
+    assert.equal(await git.branchExistsLocal('develop'), true);
+    assert.equal(await git.branchExistsLocal('master'), true);
+  });
+
+  it('detectRecommendedConfig recommends 2-stage for develop+master and direct mode for main-only', async () => {
+    const fixture = createRepoFixture();
+    tempRoots.push(fixture.rootDir);
+    const gitWithDevelop = new GitClient(fixture.workDir);
+    const recDevelop = await detectRecommendedConfig(gitWithDevelop);
+    assert.equal(recDevelop.useDevelopBranch, true);
+    assert.equal(recDevelop.masterBranch, 'master');
+
+    const mainOnlyRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gitlane-main-')));
+    tempRoots.push(mainOnlyRoot);
+    runGit(mainOnlyRoot, ['init']);
+    runGit(mainOnlyRoot, ['config', 'user.name', 'Test']);
+    runGit(mainOnlyRoot, ['config', 'user.email', 'test@example.com']);
+    runGit(mainOnlyRoot, ['checkout', '-b', 'main']);
+    fs.writeFileSync(path.join(mainOnlyRoot, 'README.md'), '# hi\n', 'utf8');
+    runGit(mainOnlyRoot, ['add', '.']);
+    runGit(mainOnlyRoot, ['commit', '-m', 'init']);
+
+    const gitMainOnly = new GitClient(mainOnlyRoot);
+    const recMain = await detectRecommendedConfig(gitMainOnly);
+    assert.equal(recMain.useDevelopBranch, false);
+    assert.equal(recMain.masterBranch, 'main');
+  });
+
+  it('provides friendly Korean recovery guidance when push is rejected and keeps task branch', async () => {
+    const fixture = createRepoFixture();
+    tempRoots.push(fixture.rootDir);
+
+    const git = new GitClient(fixture.workDir);
+    const ui = new MockWorkflowUI();
+    const service = new WorkflowService(git, ui, DEFAULT_FLOW_CONFIG, FIXED_NOW);
+
+    // Start task from initial develop
+    ui.onPromptTaskName = () => 'push_reject_case';
+    await service.startTask();
+    fs.writeFileSync(path.join(fixture.workDir, 'task.txt'), 'task\n', 'utf8');
+    runGit(fixture.workDir, ['add', 'task.txt']);
+    runGit(fixture.workDir, ['commit', '-m', 'feat: task']);
+
+    // Peer pushes a commit to origin/develop after workDir syncs?
+    // Simulate by syncing in mergeToDevelop, then having peer push right before push?
+    // Instead, stub git.push to throw non-fast-forward error cleanly.
+    const originalPush = git.push.bind(git);
+    git.push = async () => {
+      throw new Error('git push 실패: ! [rejected] develop -> develop (non-fast-forward)');
+    };
+
+    ui.onPromptMergeTarget = () => 'develop';
+    ui.onConfirmMergeToDevelop = () => 'delete';
+
+    await assert.rejects(
+      () => service.mergeToDevelop(),
+      (err: Error) => {
+        assert.match(err.message, /푸시가 거절되었습니다/);
+        assert.match(err.message, /Pull\(동기화\)/);
+        return true;
+      }
+    );
+
+    // Restore and verify task branch was NOT deleted
+    git.push = originalPush;
+    assert.equal(await git.branchExistsLocal('20261119_push_reject_case'), true);
   });
 });

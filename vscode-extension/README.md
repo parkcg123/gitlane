@@ -18,16 +18,20 @@ develop (Staging) ──[① Start Task]──▶ YYYYMMDD_task (Feature Branch)
 
 > **Direct-to-Master Mode (`useDevelopBranch: false`)**: When `develop` is disabled, ① Start Task forks from `master` (or `main`), ② Merge directly merges and pushes to `master`, and ③ Release is automatically hidden.
 
-1. **① Start Task (`gitlane.startTask`)**: Syncs `develop` (or `master` when `useDevelopBranch` is `false`) from remote and creates `YYYYMMDD_task` using your local timezone date. Offers auto-stash if there are uncommitted changes.
-2. **② Merge (`gitlane.mergeToDevelop`)**: Verifies clean working tree and non-protected branch, merges into `develop` (or directly into `master` when `useDevelopBranch` is `false`) with `--no-ff`, pushes to remote, and lets you delete or keep the task branch.
-3. **③ Release to master (`gitlane.releaseToMaster`)**: Syncs `develop` and `master`, previews up to 5 ahead commits, merges into `master`, pushes, and optionally switches back to `develop`.
-4. **Conflict Guardrail & Manager (`gitlane.openConflictManager`)**: Immediately stops on merge conflicts and opens an IntelliJ-style **Conflict Manager** panel with per-file resolution status, explicit branch-labeled one-click actions (`Keep target` / `Apply incoming`), VS Code 3-Way Merge Editor integration, **Complete Merge**, and **Abort Merge**.
+1. **① Start Task (`gitlane.startTask`)**: Syncs `develop` (or `master` when `useDevelopBranch` is `false`) from remote and creates `YYYYMMDD_task` using your local timezone date. Offers auto-stash and one-click `stash pop` onto the new branch when uncommitted changes exist.
+2. **② Merge (`gitlane.mergeToDevelop`)**: Verifies clean working tree and non-protected branch, previews up to 5 ahead commits, lets you choose **`develop` only / `master` only / both (`develop + master`)**, merges with `--no-ff`, pushes (with friendly recovery guidance if rejected), and lets you delete or keep the task branch (or clean up immediately when already merged).
+3. **Delete Task Branch (`gitlane.deleteTaskBranch` & `gitlane.cleanupMergedBranches`)**: Safely deletes merged task branches (`-d`), warns before force-deleting (`-D`) unmerged branches, and supports bulk cleanup of already-merged task branches.
+4. **③ Release to master (`gitlane.releaseToMaster`)**: Syncs `develop` and `master`, previews up to 5 ahead commits, merges into `master`, pushes, and optionally switches back to `develop`.
+5. **Multi-Repository Support (`v0.4.0`)**: Automatically discovers multi-root workspaces, nested `.git` subdirectories, and submodules/worktrees, showing a **unified Status Bar** (`GitLane [repo]: branch (+N)`) and a **single-screen separator-grouped QuickPick menu**.
+6. **Configuration Wizard (`gitlane.initConfig`)**: Auto-detects `develop`, `master`, and `main` branches to recommend and generate `.gitlane.json` (or opens it directly if present).
+7. **Conflict Guardrail & Manager (`gitlane.openConflictManager`)**: Immediately stops on merge conflicts and opens an IntelliJ-style **Conflict Manager** panel with per-file resolution status, explicit branch-labeled one-click actions (`Keep target` / `Apply incoming`), VS Code 3-Way Merge Editor integration, **Complete Merge** (including multi-target continuation), and **Abort Merge**.
 
 ## Status Bar Indicators
 
 | State | Status Bar Text | Click Action |
 | :--- | :--- | :--- |
 | Merge conflict in progress | `GitLane: 머지 충돌 중` (Warning) | Opens Conflict Resolution Menu |
+| Multi-repo (2+ repositories) | `GitLane [<repo>]: <branch> (+N)` (or conflict priority) | Opens Single-Screen Grouped Menu |
 | `master` (uncommitted changes) | `GitLane: master (운영)` (Warning) | Opens Workflow Menu |
 | `master` (clean) | `GitLane: master (운영)` | Opens Workflow Menu |
 | `develop` (`useDevelopBranch: true`) | `GitLane: develop (스테이지)` | Opens Workflow Menu |

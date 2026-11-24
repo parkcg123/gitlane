@@ -129,6 +129,31 @@ class GitLaneActionGroup : ActionGroupCompat() {
             }
         }
 
+        val toolsRepo = activeRepo ?: repos.first()
+        result.add(Separator.create("도구 / 설정"))
+        result.add(
+            RepoScopedAction(
+                repo = toolsRepo,
+                text = "[${toolsRepo.label}] 완료된 작업 브랜치 정리",
+                description = "${toolsRepo.label}: 이미 병합 완료된 로컬 작업 브랜치를 일괄 삭제합니다.",
+                taskTitle = "GitLane [${toolsRepo.label}]: 완료된 작업 브랜치 정리",
+                offerContinueIfResolved = false,
+                operation = { it.cleanupMergedBranches() },
+            ),
+        )
+        result.add(
+            object : DumbAwareAction(
+                "[${toolsRepo.label}] 설정 (.gitlane.json)",
+                "${toolsRepo.label}: .gitlane.json 설정 파일을 생성하거나 엽니다.",
+                null,
+            ) {
+                override fun getActionUpdateThread(): ActionUpdateThread = ActionUpdateThread.BGT
+                override fun actionPerformed(e: AnActionEvent) {
+                    InitConfigAction.runForRepo(project, toolsRepo.root, toolsRepo.label)
+                }
+            },
+        )
+
         return result.toTypedArray()
     }
 
@@ -145,10 +170,16 @@ class GitLaneActionGroup : ActionGroupCompat() {
             "GitLane.ContinueMerge",
             "GitLane.AbortMerge",
         )
+        val toolIds = listOf(
+            "GitLane.CleanupMergedBranches",
+            "GitLane.InitConfig",
+        )
         val actions = mutableListOf<AnAction>()
         ids.forEach { id -> manager.getAction(id)?.let { actions.add(it) } }
         actions.add(Separator.getInstance())
         conflictIds.forEach { id -> manager.getAction(id)?.let { actions.add(it) } }
+        actions.add(Separator.create("도구 / 설정"))
+        toolIds.forEach { id -> manager.getAction(id)?.let { actions.add(it) } }
         return actions.toTypedArray()
     }
 

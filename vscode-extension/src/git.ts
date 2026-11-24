@@ -132,6 +132,14 @@ export class GitClient {
     return null;
   }
 
+  async listLocalBranches(): Promise<string[]> {
+    const res = await this.runOrThrow(['for-each-ref', '--format=%(refname:short)', 'refs/heads/']);
+    return res.stdout
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+  }
+
   async isMergeInProgress(): Promise<boolean> {
     const res = await this.runRaw(['rev-parse', '--verify', '-q', 'MERGE_HEAD']);
     return res.exitCode === 0;
@@ -250,6 +258,10 @@ export class GitClient {
 
   async stashPush(message: string): Promise<void> {
     await this.runOrThrow(['stash', 'push', '-u', '-m', message]);
+  }
+
+  async stashPop(): Promise<void> {
+    await this.runOrThrow(['stash', 'pop']);
   }
 
   async merge(branch: string, noFastForward: boolean): Promise<MergeResult> {

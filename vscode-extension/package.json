@@ -2,7 +2,7 @@
   "name": "gitlane-flow",
   "displayName": "GitLane Flow",
   "description": "팀 공용 초간단 Git 워크플로우 (develop → YYYYMMDD_작업명 → develop → master)",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "pck",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -84,6 +84,16 @@
         "command": "gitlane.openConflictManager",
         "title": "GitLane: 충돌 관리 창 열기",
         "icon": "$(layout)"
+      },
+      {
+        "command": "gitlane.cleanupMergedBranches",
+        "title": "GitLane: 완료된 작업 브랜치 정리",
+        "icon": "$(clear-all)"
+      },
+      {
+        "command": "gitlane.initConfig",
+        "title": "GitLane: 설정 (.gitlane.json)",
+        "icon": "$(gear)"
       }
     ],
     "menus": {
@@ -122,6 +132,13 @@
         {
           "command": "gitlane.abortMerge",
           "when": "gitlane.merging"
+        },
+        {
+          "command": "gitlane.cleanupMergedBranches",
+          "when": "!gitlane.merging"
+        },
+        {
+          "command": "gitlane.initConfig"
         }
       ]
     },

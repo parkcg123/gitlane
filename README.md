@@ -14,10 +14,13 @@ develop (스테이지) ──[① 작업 시작]──▶ YYYYMMDD_작업명 (�
                                       master (운영 서버)
 ```
 
-1. **① 작업 시작 (`startTask`)**: `develop`을 최신화한 뒤 `YYYYMMDD_작업명` 브랜치를 생성하고 이동합니다. 수정 중인 파일이 있으면 Stash 후 진행할 수 있습니다.
-2. **② 스테이지 반영 (`mergeToDevelop`)**: 작업 브랜치를 `develop`에 병합(`--no-ff`)하고 푸시합니다. 병합 후 브랜치 삭제 또는 유지를 선택할 수 있습니다.
+1. **① 작업 시작 (`startTask`)**: `develop`(직행 모드 시 `master`)을 최신화한 뒤 `YYYYMMDD_작업명` 브랜치를 생성하고 이동합니다. 수정 중인 파일이 있으면 Stash 후 새 브랜치로 바로 복원(`stash pop`)할 수 있습니다.
+2. **② 작업 반영 (`mergeToDevelop`)**: 작업 브랜치를 **`develop`만 / `master`만 / `develop + master` 둘 다** 중 선택해 병합(`--no-ff`)·푸시하며, 병합 후 브랜치 삭제 또는 유지를 선택할 수 있습니다. (이미 반영 완료된 브랜치면 바로 삭제 제안)
 3. **③ 운영 반영 (`releaseToMaster`)**: 스테이지 확인이 끝난 `develop` 전체를 `master`에 병합(`--no-ff`)하고 푸시합니다. 완료 후 설정에 따라 `develop`으로 복귀합니다.
-4. **충돌 가드레일 (`continueMerge` / `abortMerge`)**: 병합 중 충돌이 발생하면 즉시 중단하고, VS Code에서는 **충돌 관리 창(Webview)**, IntelliJ에서는 **네이티브 3-Way Merge 창**을 통해 충돌 해결·완료·원복을 지원합니다.
+4. **작업 브랜치 삭제 (`deleteTaskBranch`)**: 이미 병합된 브랜치는 안전 삭제(`-d`), 미병합 커밋이 남아 있으면 경고 확인 후 강제 삭제(`-D`)하며 원격 브랜치도 정리합니다. (비작업 브랜치에서는 병합·삭제 메뉴 자동 숨김)
+5. **복합 Git 저장소 지원 (`v0.4.0`)**: Multi-root, 하위 폴더 `.git`, 서브모듈/worktree를 자동 인식해 통합 상태바(`GitLane [저장소]: 브랜치 (+N)`)와 한 화면 저장소별 구분 메뉴로 관리합니다.
+6. **도구 및 설정 마법사 (`v0.5.0`)**: 이미 병합 완료된 작업 브랜치 일괄 정리(`cleanupMergedBranches`), `.gitlane.json` 자동 감지 생성 마법사(IntelliJ `Settings → Tools → GitLane` 포함), `② 작업 반영` 커밋 미리보기(최대 5줄), `--ff-only` 및 Push 거절 시 한국어 복구 안내를 제공합니다.
+7. **충돌 가드레일 (`continueMerge` / `abortMerge`)**: 병합 중 충돌이 발생하면 즉시 중단하고, VS Code에서는 **충돌 관리 창(Webview)**, IntelliJ에서는 **네이티브 3-Way Merge 창**을 통해 충돌 해결·남은 대상 이어하기·완료·원복을 지원합니다.
 
 ## Monorepo 구조
 
@@ -48,8 +51,8 @@ gitlane/
   cd vscode-extension
   npm install
   npm run compile
-  npm run package   # gitlane-flow-0.2.0.vsix 생성
-  code --install-extension gitlane-flow-0.2.0.vsix
+  npm run package   # gitlane-flow-0.5.0.vsix 생성
+  code --install-extension gitlane-flow-0.5.0.vsix
   ```
   또는 VS Code **Extensions** → `...` → **Install from VSIX...** 에서 `.vsix` 파일을 선택합니다.
 
@@ -60,7 +63,7 @@ gitlane/
   * 요구 환경: **JDK 21**, **IntelliJ IDEA `2024.2+`** (`Git4Idea` 번들 플러그인 활성)
   ```bash
   cd intellij-plugin
-  ./gradlew buildPlugin  # build/distributions/gitlane-intellij-0.2.0.zip 생성
+  ./gradlew buildPlugin  # build/distributions/gitlane-intellij-0.5.0.zip 생성
   ```
   IntelliJ IDEA **Settings → Plugins → ⚙ → Install Plugin from Disk...** 에서 생성된 `.zip` 파일을 선택하고 IDE를 재시작합니다.
 

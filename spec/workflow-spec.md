@@ -49,12 +49,13 @@
 * **실행 절차**:
   1. 원격(`remote`)이 있으면 `git fetch <remote>` 수행.
   2. 로컬에 `develop`이 없으면 원격 추적 브랜치에서 생성 후 체크아웃.
-  3. `git checkout <develop>` 후 원격 `develop`이 존재하면 `git pull --ff-only <remote> <develop>`.
+  3. `git checkout <develop>` 후 원격 `develop`이 존재하면 `git pull --ff-only <remote> <develop>` (분기 시 친화적 한국어 복구 안내).
   4. 사용자에게 작업명 입력을 요청 (실시간으로 `YYYYMMDD_작업명` 미리보기 및 유효성 검사 표시).
   5. 대상 브랜치명 `YYYYMMDD_작업명`이 로컬에 이미 존재하면:
      * `"기존 브랜치로 이동"` 선택 시 해당 브랜치로 `checkout`.
      * `"취소"` 선택 시 종료.
   6. `git checkout -b <taskBranch>` 실행.
+  7. 사전 검사에서 자동 Stash를 수행했다면 `"임시 저장(Stash)한 변경사항을 '<taskBranch>' 브랜치로 바로 복원(Stash Pop)할까요?"` 확인 후 `git stash pop` 실행(충돌 시 경고 안내).
 
 ### ② 작업 반영 (`mergeToDevelop`)
 
@@ -67,6 +68,8 @@
   2. Detached HEAD 상태이거나 현재 브랜치가 보호 브랜치(`useDevelopBranch: true`일 때 `develop` 또는 `master`, `false`일 때 `master`)이면 차단합니다.
   3. 미커밋 변경사항이 있으면 커밋 또는 Stash를 먼저 하도록 안내하고 차단합니다.
   4. 선택한 모든 대상 브랜치를 최신화한 뒤 `<target>..<taskBranch>` 커밋이 모두 0건이면 `"이미 반영되어 있습니다. 작업 브랜치를 삭제할까요?"`를 물어보고, 승인 시 작업 브랜치를 삭제(`-d` + 원격 삭제)합니다.
+  5. 반영 커밋이 있으면 반영 방식(`병합 + 푸시 + 브랜치 삭제` / `병합 + 푸시 (브랜치 유지)` / `취소`) 확인 시 포함된 커밋 미리보기(최대 5줄)를 함께 표시합니다.
+  6. 원격 `git push`가 `non-fast-forward` / `fetch first` / `rejected`로 거절되면 작업 브랜치를 삭제하지 않고 친화적인 한국어 Pull 후 재푸시 안내를 표시합니다.
 * **순차 병합 및 충돌 이어하기 (`develop + master` 선택 시)**:
   * `develop`에 있던 다른 미배포 커밋이 `master`로 섞이지 않도록, **작업 브랜치 → `develop`**, **작업 브랜치 → `master`** 순으로 각각 병합·푸시합니다.
   * 첫 번째 대상(`develop`)에서 충돌이 발생하면 `PendingConflictContext.remainingTargets`에 남은 대상(`["master"]`)을 저장하고, 충돌 해결 완료(`continueMerge`) 직후 남은 대상 병합을 자동으로 이어서 진행합니다.
@@ -163,3 +166,16 @@
   * 어느 저장소에서든 머지 충돌이 발생하면 경고 강조로 최우선 표시(`GitLane [<저장소>]: 머지 충돌 중 (+N)` 또는 `머지 충돌 M곳`)하며, 툴팁에 전체 저장소 목록과 상태를 한눈에 나열합니다.
 * **한 화면 저장소별 구분 메뉴 (2개 이상)**:
   * 단일 QuickPick(VS Code) 또는 단일 액션 그룹 팝업/메뉴(IntelliJ) 안에 저장소별 구분선(`<저장소> · <상태>`)을 두고 각 저장소의 현재 상태(충돌 여부, 작업 브랜치 여부, `.gitlane.json` 설정)에 맞는 액션만 나열해 선택한 저장소에 바로 실행합니다.
+
+---
+
+## 7. 도구 및 설정 (`cleanupMergedBranches`, `.gitlane.json` 마법사)
+
+* **완료된 작업 브랜치 일괄 정리 (`cleanupMergedBranches`)**:
+  * 메뉴 최하단 `도구 / 설정` 구분선 아래에 1회 표시됩니다.
+  * 현재 체크아웃 브랜치와 보호 브랜치(`develop`, `master`)를 제외하고, 로컬 보호 브랜치 중 하나에 이미 모든 커밋이 반영(`ahead == 0`)된 작업 브랜치만 후보로 나열합니다.
+  * 다중 선택 체크박스(기본 전체 선택)로 선택한 브랜치만 안전 삭제(`git branch -d` + 원격 best-effort 삭제)합니다.
+* **저장소 설정 자동 감지 및 생성 (`initConfig` / IntelliJ `Settings → Tools → GitLane`)**:
+  * `.gitlane.json`이 이미 있으면 에디터에서 바로 엽니다.
+  * 없으면 저장소의 로컬/원격 `develop`, `master`, `main` 존재 여부를 자동 감지(`detectRecommendedConfig`)하여 2단계 모드 또는 운영 직행 모드(`useDevelopBranch: false`, `masterBranch: "main" | "master"`)를 추천하고 `.gitlane.json`을 생성합니다.
+  * IntelliJ에서는 **Settings → Tools → GitLane** 네이티브 설정 UI(`GitLaneConfigurable`)에서도 저장소별 설정 편집 및 `브랜치 자동 감지`를 제공합니다.

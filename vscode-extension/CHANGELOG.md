@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.0] - 2026-11-24
+
+### Added
+- `.gitlane.json` auto-detect creation/open wizard (`GitLane: 설정 (.gitlane.json)`), detecting `develop`, `master`, or `main` to recommend 2-stage or direct-to-master mode.
+- Bulk cleanup of already-merged task branches (`GitLane: 완료된 작업 브랜치 정리`) with native multi-select picker.
+- Commit preview (up to 5 lines) inside `② 작업 반영` confirmation QuickPick, matching `③ 운영 반영`.
+- Optional `stash pop` restore prompt right after creating or switching to a task branch during dirty-tree auto-stash in `① 작업 시작`.
+
+### Changed
+- Friendly Korean recovery guidance when `git pull --ff-only` fails due to branch divergence or when `git push` is rejected (`non-fast-forward` / `fetch first`), keeping the task branch intact on push failure.
+- Added a unified bottom `도구 / 설정` section in the GitLane menu.
+
 ## [0.4.0] - 2026-11-24
 
 ### Added

@@ -16,8 +16,45 @@ data class FlowConfig(
 ) {
     fun taskBaseBranch(): String = if (useDevelopBranch) developBranch else masterBranch
 
+    fun toPrettyJson(): String {
+        fun esc(value: String): String = buildString {
+            append('"')
+            for (ch in value) {
+                when (ch) {
+                    '"' -> append("\\\"")
+                    '\\' -> append("\\\\")
+                    '\b' -> append("\\b")
+                    '\u000C' -> append("\\f")
+                    '\n' -> append("\\n")
+                    '\r' -> append("\\r")
+                    '\t' -> append("\\t")
+                    else -> append(ch)
+                }
+            }
+            append('"')
+        }
+        return buildString {
+            append("{\n")
+            append("  \"useDevelopBranch\": $useDevelopBranch,\n")
+            append("  \"developBranch\": ${esc(developBranch)},\n")
+            append("  \"masterBranch\": ${esc(masterBranch)},\n")
+            append("  \"remote\": ${esc(remote)},\n")
+            append("  \"dateFormat\": ${esc(dateFormat)},\n")
+            append("  \"separator\": ${esc(separator)},\n")
+            append("  \"returnToDevelopAfterRelease\": $returnToDevelopAfterRelease,\n")
+            append("  \"useNoFastForwardMerge\": $useNoFastForwardMerge\n")
+            append("}\n")
+        }
+    }
+
     companion object {
         const val CONFIG_FILENAME = ".gitlane.json"
+
+        fun writeToRepo(repoRoot: Path, config: FlowConfig): Path {
+            val target = repoRoot.resolve(CONFIG_FILENAME)
+            Files.writeString(target, config.toPrettyJson(), StandardCharsets.UTF_8)
+            return target
+        }
 
         fun loadFromRepo(repoRoot: Path): FlowConfig = loadWithWarning(repoRoot).config
 
