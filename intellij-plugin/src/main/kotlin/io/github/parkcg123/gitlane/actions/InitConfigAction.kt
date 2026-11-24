@@ -109,7 +109,7 @@ class InitConfigAction : DumbAwareAction() {
 
         private fun openConfigInEditor(project: Project, configPath: Path) {
             val vf = LocalFileSystem.getInstance().refreshAndFindFileByNioFile(configPath) ?: return
-            vf.refresh(false, false)
+            vf.refresh(true, false)
             FileEditorManager.getInstance(project).openFile(vf, true)
         }
     }

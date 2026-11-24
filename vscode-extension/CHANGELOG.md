@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.5.1] - 2026-11-24
+
+### Changed
+- Aligned release version with GitLane IntelliJ Plugin 0.5.1 (offloaded IDE/Git state refresh off EDT in `InitConfigAction` and `GitLaneConfigurable`).
+
 ## [0.5.0] - 2026-11-24
 
 ### Added

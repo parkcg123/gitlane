@@ -3,6 +3,7 @@ package io.github.parkcg123.gitlane.ui
 import com.intellij.dvcs.repo.Repository
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
+import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.components.service
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
@@ -165,6 +166,11 @@ object IntelliJGitSupport {
 
     fun refreshIdeState(project: Project, repoRoot: Path) {
         if (project.isDisposed) {
+            return
+        }
+        val app = ApplicationManager.getApplication()
+        if (app.isDispatchThread) {
+            app.executeOnPooledThread { refreshIdeState(project, repoRoot) }
             return
         }
         LocalFileSystem.getInstance().refreshAndFindFileByNioFile(repoRoot)?.let { rootVf ->

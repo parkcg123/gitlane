@@ -4,7 +4,6 @@ import com.intellij.openapi.options.Configurable
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
-import com.intellij.openapi.vfs.LocalFileSystem
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.FormBuilder
@@ -159,9 +158,8 @@ class GitLaneConfigurable(private val project: Project) : Configurable {
     override fun apply() {
         val targetRepo = selectedRepo() ?: return
         val nextConfig = currentFormConfig()
-        val written = FlowConfig.writeToRepo(targetRepo.root, nextConfig)
+        FlowConfig.writeToRepo(targetRepo.root, nextConfig)
         loadedConfig = nextConfig
-        LocalFileSystem.getInstance().refreshAndFindFileByNioFile(written)?.refresh(false, false)
         IntelliJGitSupport.refreshIdeState(project, targetRepo.root)
     }
 
