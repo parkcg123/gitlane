@@ -12,18 +12,23 @@ import io.github.parkcg123.gitlane.ui.IntelliJWorkflowUi
 import io.github.parkcg123.gitlane.workflow.WorkflowEngine
 import io.github.parkcg123.gitlane.workflow.WorkflowResult
 import io.github.parkcg123.gitlane.workflow.WorkflowStatus
+import java.nio.file.Path
 
 object WorkflowActionSupport {
     fun run(
         project: Project,
         title: String,
         offerContinueIfResolved: Boolean = false,
+        explicitRepoRoot: Path? = null,
+        explicitRepoLabel: String? = null,
         operation: (WorkflowEngine) -> WorkflowResult,
     ) {
         ProgressManager.getInstance().run(object : Task.Backgroundable(project, title, false) {
             override fun run(indicator: ProgressIndicator) {
                 indicator.isIndeterminate = true
-                val repoRoot = IntelliJGitSupport.resolveRepoRoot(project)
+                val allRepos = IntelliJGitSupport.discoverReposFast(project)
+                val activeRepo = IntelliJGitSupport.resolveActiveRepo(project, allRepos)
+                val repoRoot = explicitRepoRoot ?: activeRepo?.root ?: IntelliJGitSupport.resolveRepoRoot(project)
                 if (repoRoot == null) {
                     IntelliJGitSupport.notify(
                         project,
@@ -33,10 +38,18 @@ object WorkflowActionSupport {
                     return
                 }
 
+                IntelliJGitSupport.rememberSelectedRepo(project, repoRoot)
+                val effectiveLabel = explicitRepoLabel
+                    ?: if (allRepos.size >= 2) {
+                        allRepos.firstOrNull { it.root == repoRoot }?.label ?: activeRepo?.label
+                    } else {
+                        null
+                    }
+
                 try {
                     val loaded = FlowConfig.loadWithWarning(repoRoot)
                     loaded.warning?.let { warning ->
-                        IntelliJGitSupport.notify(project, warning, NotificationType.WARNING)
+                        IntelliJGitSupport.notify(project, warning, NotificationType.WARNING, effectiveLabel)
                     }
 
                     val git = GitRunner(repoRoot)
@@ -45,6 +58,7 @@ object WorkflowActionSupport {
                         repoRoot,
                         loaded.config.separator,
                         loaded.config.useDevelopBranch,
+                        effectiveLabel,
                     )
                     val engine = WorkflowEngine(git, ui, loaded.config)
 
@@ -61,7 +75,7 @@ object WorkflowActionSupport {
                     }
                 } catch (e: Exception) {
                     val detail = e.message ?: e::class.java.simpleName
-                    IntelliJGitSupport.notify(project, "GitLane 오류: $detail", NotificationType.ERROR)
+                    IntelliJGitSupport.notify(project, "GitLane 오류: $detail", NotificationType.ERROR, effectiveLabel)
                 } finally {
                     IntelliJGitSupport.refreshIdeState(project, repoRoot)
                 }

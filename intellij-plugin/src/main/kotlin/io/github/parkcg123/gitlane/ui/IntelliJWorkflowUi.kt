@@ -25,7 +25,12 @@ class IntelliJWorkflowUi(
     private val repoRoot: Path,
     private val separator: String,
     private val useDevelopBranch: Boolean = true,
+    private val repoLabel: String? = null,
 ) : WorkflowUi {
+
+    private fun dialogTitle(suffix: String): String {
+        return if (repoLabel != null) "GitLane [$repoLabel] — $suffix" else "GitLane — $suffix"
+    }
 
     private fun <T> runOnEdtAndGet(block: () -> T): T {
         val resultRef = AtomicReference<T>()
@@ -61,7 +66,7 @@ class IntelliJWorkflowUi(
             Messages.showInputDialog(
                 project,
                 "생성될 브랜치 접두사: $datePrefix<작업명>",
-                "GitLane — ① 작업 시작",
+                dialogTitle("① 작업 시작"),
                 Messages.getQuestionIcon(),
                 "",
                 validator,
@@ -74,7 +79,7 @@ class IntelliJWorkflowUi(
             val answer = Messages.showYesNoDialog(
                 project,
                 "커밋되지 않은 변경사항이 있습니다. 임시 저장(Stash) 후 새 작업을 시작할까요?",
-                "GitLane — ① 작업 시작",
+                dialogTitle("① 작업 시작"),
                 "임시 저장(Stash) 후 진행",
                 "취소",
                 Messages.getWarningIcon(),
@@ -88,7 +93,7 @@ class IntelliJWorkflowUi(
             val answer = Messages.showYesNoDialog(
                 project,
                 "'$branchName' 브랜치가 이미 존재합니다. 해당 브랜치로 이동할까요?",
-                "GitLane — ① 작업 시작",
+                dialogTitle("① 작업 시작"),
                 "기존 브랜치로 이동",
                 "취소",
                 Messages.getQuestionIcon(),
@@ -106,7 +111,7 @@ class IntelliJWorkflowUi(
             val choiceIndex = Messages.showDialog(
                 project,
                 "'$taskBranch' 작업 브랜치를 어느 브랜치에 반영할까요?",
-                "GitLane — ② 작업 반영 대상 선택",
+                dialogTitle("② 작업 반영 대상 선택"),
                 arrayOf(
                     "$developBranch (스테이지만)",
                     "$masterBranch (운영만)",
@@ -131,9 +136,9 @@ class IntelliJWorkflowUi(
         commitCount: Int,
     ): MergeToDevelopChoice {
         val title = if (useDevelopBranch) {
-            "GitLane — ② 작업 반영 ($taskBranch → $developBranch)"
+            dialogTitle("② 작업 반영 ($taskBranch → $developBranch)")
         } else {
-            "GitLane — ② 운영 바로 반영 ($taskBranch → $developBranch)"
+            dialogTitle("② 운영 바로 반영 ($taskBranch → $developBranch)")
         }
         val commitDesc = if (developBranch.contains(" + ")) "최대 ${commitCount}개" else "${commitCount}개"
         return runOnEdtAndGet {
@@ -161,7 +166,7 @@ class IntelliJWorkflowUi(
             val answer = Messages.showYesNoDialog(
                 project,
                 "'$taskBranch'는 이미 '$targetSummary'에 반영되어 병합할 새 커밋이 없습니다. 작업 브랜치를 삭제할까요?",
-                "GitLane — 작업 브랜치 정리",
+                dialogTitle("작업 브랜치 정리"),
                 "브랜치 삭제",
                 "유지",
                 Messages.getQuestionIcon(),
@@ -186,7 +191,7 @@ class IntelliJWorkflowUi(
             val answer = Messages.showYesNoDialog(
                 project,
                 message,
-                "GitLane — 작업 브랜치 삭제",
+                dialogTitle("작업 브랜치 삭제"),
                 confirmText,
                 "취소",
                 icon,
@@ -216,7 +221,7 @@ class IntelliJWorkflowUi(
             val answer = Messages.showYesNoDialog(
                 project,
                 message,
-                "GitLane — ③ 운영 반영 ($developBranch → $masterBranch)",
+                dialogTitle("③ 운영 반영 ($developBranch → $masterBranch)"),
                 "운영(master)에 병합 및 푸시",
                 "취소",
                 Messages.getWarningIcon(),
@@ -230,7 +235,7 @@ class IntelliJWorkflowUi(
             val answer = Messages.showYesNoDialog(
                 project,
                 "'$targetBranch' 병합을 취소하고 원래 상태로 복구할까요?",
-                "GitLane — 머지 취소",
+                dialogTitle("머지 취소"),
                 "머지 취소 (원복)",
                 "닫기",
                 Messages.getWarningIcon(),
@@ -259,7 +264,7 @@ class IntelliJWorkflowUi(
             val choiceIndex = Messages.showDialog(
                 project,
                 message,
-                "GitLane — 머지 충돌 발생",
+                dialogTitle("머지 충돌 발생"),
                 arrayOf("충돌 해결 창 열기 (3-Way Merge)", "머지 취소 (원복)", "나중에 해결"),
                 0,
                 Messages.getWarningIcon(),
@@ -273,15 +278,15 @@ class IntelliJWorkflowUi(
     }
 
     override fun showInfo(message: String) {
-        IntelliJGitSupport.notify(project, message, NotificationType.INFORMATION)
+        IntelliJGitSupport.notify(project, message, NotificationType.INFORMATION, repoLabel)
     }
 
     override fun showWarning(message: String) {
-        IntelliJGitSupport.notify(project, message, NotificationType.WARNING)
+        IntelliJGitSupport.notify(project, message, NotificationType.WARNING, repoLabel)
     }
 
     override fun showError(message: String) {
-        IntelliJGitSupport.notify(project, message, NotificationType.ERROR)
+        IntelliJGitSupport.notify(project, message, NotificationType.ERROR, repoLabel)
     }
 
     override fun openConflictedFiles(files: List<String>) {
@@ -307,6 +312,7 @@ class IntelliJWorkflowUi(
                 project,
                 "충돌 파일을 IDE에서 열지 못했습니다. Git 도구 창에서 충돌을 해결해 주세요.",
                 NotificationType.WARNING,
+                repoLabel,
             )
         }
     }
@@ -324,7 +330,7 @@ class IntelliJWorkflowUi(
             val answer = Messages.showYesNoDialog(
                 project,
                 "모든 충돌이 해결되었습니다. 지금 병합 커밋 및 푸시를 완료할까요?",
-                "GitLane — 충돌 해결 완료",
+                dialogTitle("충돌 해결 완료"),
                 "커밋 및 푸시 완료",
                 "나중에 완료",
                 Messages.getQuestionIcon(),

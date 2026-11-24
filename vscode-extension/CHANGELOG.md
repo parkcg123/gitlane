@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0] - 2026-11-24
+
+### Added
+- Automatic multi-repository discovery across multi-root workspaces, nested subdirectories (up to depth 2), and Git submodules/worktrees, with path-segment disambiguation for duplicate folder names.
+- Unified single Status Bar item with conflict-priority indicator, active-editor tracking, and a full multi-repository hover tooltip.
+- Single-screen grouped QuickPick menu (`QuickPickItemKind.Separator` per repository) showing each repository's branch state and contextual workflow actions side by side.
+
 ## [0.3.0] - 2026-11-24
 
 ### Added

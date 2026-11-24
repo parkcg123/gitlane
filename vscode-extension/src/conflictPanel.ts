@@ -7,6 +7,7 @@ import type { PendingConflictContext, WorkflowService } from './workflow';
 
 export interface ConflictPanelParams {
   repoRoot: string;
+  repoLabel?: string;
   git: GitClient;
   service: WorkflowService;
   getPendingConflict: () => PendingConflictContext | undefined;
@@ -28,8 +29,12 @@ export class ConflictManagerPanel implements vscode.Disposable {
 
   async showOrReveal(params: ConflictPanelParams): Promise<void> {
     this.currentParams = params;
+    const panelTitle = params.repoLabel
+      ? `GitLane [${params.repoLabel}] — 충돌 관리`
+      : 'GitLane — 충돌 관리';
 
     if (this.panel) {
+      this.panel.title = panelTitle;
       this.panel.reveal(vscode.ViewColumn.Active);
       await this.refresh();
       return;
@@ -37,7 +42,7 @@ export class ConflictManagerPanel implements vscode.Disposable {
 
     const panel = vscode.window.createWebviewPanel(
       'gitlane.conflictManager',
-      'GitLane — 충돌 관리',
+      panelTitle,
       vscode.ViewColumn.Active,
       {
         enableScripts: true,
